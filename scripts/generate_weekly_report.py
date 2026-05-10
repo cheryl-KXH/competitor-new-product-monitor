@@ -21,6 +21,8 @@ try:
     from openpyxl.cell.rich_text import CellRichText, TextBlock
     from openpyxl.cell.text import InlineFont
     from openpyxl.drawing.image import Image as XLImage
+    from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+    from openpyxl.drawing.xdr import XDRPositiveSize2D
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import column_index_from_string, get_column_letter
     from PIL import Image as PILImage
@@ -241,6 +243,8 @@ def query_records(
     records: list[dict[str, Any]] = []
     cursor = None
     seen_cursors: set[str] = set()
+    seen_record_ids: set[str] = set()
+    skipped_duplicates: list[str] = []
     requested_field_ids = list(dict.fromkeys(field_ids.values()))
 
     while True:
@@ -262,12 +266,23 @@ def query_records(
             payload["cursor"] = cursor
         data = call_dingtalk_tool(dingtalk, "query_records", payload)
         batch = data.get("data", {}).get("records", []) or []
-        records.extend(batch)
+        new_records = 0
+        for raw_record in batch:
+            record_id = str(raw_record.get("recordId") or "").strip()
+            if record_id:
+                if record_id in seen_record_ids:
+                    skipped_duplicates.append(describe_raw_record(raw_record, configs, field_ids))
+                    continue
+                seen_record_ids.add(record_id)
+            records.append(raw_record)
+            new_records += 1
         next_cursor = data.get("data", {}).get("nextCursor")
-        if not next_cursor or next_cursor in seen_cursors or not batch:
+        if not next_cursor or next_cursor in seen_cursors or not batch or new_records == 0:
             break
         seen_cursors.add(next_cursor)
         cursor = next_cursor
+    if skipped_duplicates:
+        print_duplicate_warning("钉钉分页重复记录", skipped_duplicates)
     return records
 
 
@@ -352,6 +367,9 @@ def normalize_records(
     rules = configs["report_rules"]
     brand_set = set(brands)
     normalized: list[ReportRecord] = []
+    seen_record_ids: set[str] = set()
+    seen_business_keys: set[tuple[str, str, str, str, str]] = set()
+    skipped_duplicates: list[str] = []
 
     for raw_record in raw_records:
         cells = raw_record.get("cells", {})
@@ -367,21 +385,30 @@ def normalize_records(
 
         category = compute_category(values, rules)
         remark = compute_remark(values, rules)
-        normalized.append(
-            ReportRecord(
-                record_id=raw_record.get("recordId", ""),
-                brand=brand,
-                product_name=product_name,
-                launch_date=values.get("launchDate"),
-                price=str(values.get("price") or ""),
-                category=category,
-                series=str(values.get("series") or ""),
-                selling_point=str(values.get("sellingPoint") or ""),
-                ingredients=str(values.get("ingredients") or ""),
-                image_urls=values.get("appearanceImages") or [],
-                remark=remark,
-            )
+        record = ReportRecord(
+            record_id=str(raw_record.get("recordId") or "").strip(),
+            brand=brand,
+            product_name=product_name,
+            launch_date=values.get("launchDate"),
+            price=str(values.get("price") or ""),
+            category=category,
+            series=str(values.get("series") or ""),
+            selling_point=str(values.get("sellingPoint") or ""),
+            ingredients=str(values.get("ingredients") or ""),
+            image_urls=values.get("appearanceImages") or [],
+            remark=remark,
         )
+        if record.record_id and record.record_id in seen_record_ids:
+            skipped_duplicates.append(describe_report_record(record))
+            continue
+        business_key = normalized_record_business_key(record)
+        if business_key in seen_business_keys:
+            skipped_duplicates.append(describe_report_record(record))
+            continue
+        if record.record_id:
+            seen_record_ids.add(record.record_id)
+        seen_business_keys.add(business_key)
+        normalized.append(record)
 
     brand_order = {brand: i for i, brand in enumerate(brands)}
     normalized.sort(
@@ -391,6 +418,8 @@ def normalize_records(
             r.product_name,
         )
     )
+    if skipped_duplicates:
+        print_duplicate_warning("标准化重复记录", skipped_duplicates)
     return normalized
 
 
@@ -454,19 +483,141 @@ def cm_to_pixels(cm: float) -> int:
     return int(round(cm / 2.54 * 96))
 
 
-def estimate_row_height(text: str, col_chars: float, min_height: float, max_height: float) -> float:
+def pixels_to_emu(px: int) -> int:
+    return int(px * 9525)
+
+
+def points_to_pixels(points: float) -> int:
+    return int(round(points * 96 / 72))
+
+
+def column_width_to_pixels(width: float | None) -> int:
+    if not width:
+        return 64
+    return int(round(width * 7.0 + 5))
+
+
+def column_width_to_pixels_with_policy(width: float | None, layout: dict[str, Any]) -> int:
+    policy = layout.get("columnWidthPolicy", {})
+    scale = float(policy.get("pixelScale", layout.get("image", {}).get("columnPixelScale", 7.0)))
+    padding = float(policy.get("pixelPadding", 5.0))
+    if not width:
+        return int(round(8.43 * scale + padding))
+    return int(round(width * scale + padding))
+
+
+def pixels_to_column_width(pixels: float, layout: dict[str, Any]) -> float:
+    policy = layout.get("columnWidthPolicy", {})
+    scale = float(policy.get("pixelScale", layout.get("image", {}).get("columnPixelScale", 7.0)))
+    padding = float(policy.get("pixelPadding", 5.0))
+    return max(1.0, round((pixels - padding) / scale, 2))
+
+
+def apply_column_widths(ws, layout: dict[str, Any]) -> None:
+    columns = dict(layout.get("columns", {}))
+    policy = layout.get("columnWidthPolicy", {})
+    auto_col = policy.get("autoFillColumn")
+    if auto_col:
+        total_px = cm_to_pixels(float(policy.get("totalWidthCm", layout.get("pageWidthCm", 18.0))))
+        fixed = dict(policy.get("fixedColumns", {}))
+        fixed_px = sum(column_width_to_pixels_with_policy(float(width), layout) for width in fixed.values())
+        auto_px = max(30, total_px - fixed_px)
+        columns.update(fixed)
+        columns[auto_col] = pixels_to_column_width(auto_px, layout)
+    for col, width in columns.items():
+        ws.column_dimensions[col].width = float(width)
+
+
+def visual_len(text: str) -> int:
+    return sum(2 if ord(ch) > 127 else 1 for ch in str(text))
+
+
+def estimate_line_count(text: str, col_chars: float) -> int:
     if not text:
-        return min_height
+        return 1
     lines = 0
+    effective_chars = max(col_chars * 1.8, 1)
     for part in str(text).split("\n"):
-        visual_len = sum(2 if ord(ch) > 127 else 1 for ch in part)
-        lines += max(1, math.ceil(visual_len / max(col_chars * 1.8, 1)))
-    return max(min_height, min(max_height, lines * 15.5))
+        length = visual_len(part)
+        lines += max(1, math.ceil(length / effective_chars))
+    return max(1, lines)
 
 
-def price_with_slash_wrap(text: str) -> str:
-    text = clean_text(text)
-    return text.replace("/", "/\n")
+def row_height_for_line_count(line_count: int, layout: dict[str, Any], max_height: float | None = None) -> float:
+    rule = layout.get("rowHeightRule", {})
+    single = float(rule.get("singleLinePt", 16.8))
+    additional = float(rule.get("additionalLinePt", 15.0))
+    height = single if line_count <= 1 else single + (line_count - 1) * additional
+    if max_height is not None:
+        height = min(max_height, height)
+    return height
+
+
+def estimate_row_height(text: str, col_chars: float, layout: dict[str, Any], max_height: float | None = None) -> float:
+    return row_height_for_line_count(estimate_line_count(text, col_chars), layout, max_height)
+
+
+def clean_price_text(text: str) -> str:
+    text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    parts = [line.strip() for line in text.split("\n") if line.strip()]
+    text = "".join(parts)
+    return re.sub(r"\s*/\s*", "/", text).strip()
+
+
+def normalized_record_business_key(record: ReportRecord) -> tuple[str, str, str, str, str]:
+    launch_date = record.launch_date.isoformat() if record.launch_date else ""
+    return (
+        record.brand.strip(),
+        record.product_name.strip(),
+        launch_date,
+        clean_price_text(record.price),
+        clean_text(record.series),
+    )
+
+
+def describe_raw_record(
+    raw_record: dict[str, Any],
+    configs: dict[str, dict[str, Any]],
+    field_ids: dict[str, str],
+) -> str:
+    fields_cfg = configs["field_mapping"]["standardFields"]
+    cells = raw_record.get("cells", {})
+    product_field = field_ids.get("productName")
+    brand_field = field_ids.get("brand")
+    product_name = ""
+    brand = ""
+    if product_field:
+        product_cfg = fields_cfg.get("productName", {})
+        product_name = str(extract_cell(cells.get(product_field), product_cfg.get("extract", "text")) or "").strip()
+    if brand_field:
+        brand_cfg = fields_cfg.get("brand", {})
+        brand = str(extract_cell(cells.get(brand_field), brand_cfg.get("extract", "text")) or "").strip()
+    record_id = str(raw_record.get("recordId") or "").strip() or "无recordId"
+    label = " / ".join(part for part in (brand, product_name) if part)
+    return f"{label or '未命名记录'} ({record_id})"
+
+
+def describe_report_record(record: ReportRecord) -> str:
+    launch_date = record.launch_date.isoformat() if record.launch_date else "无日期"
+    record_id = record.record_id or "无recordId"
+    return f"{record.brand} / {record.product_name} / {launch_date} / {clean_price_text(record.price)} ({record_id})"
+
+
+def print_duplicate_warning(label: str, items: list[str]) -> None:
+    print(f"WARNING: 已跳过 {len(items)} 条{label}：", file=sys.stderr)
+    for item in items[:10]:
+        print(f"  - {item}", file=sys.stderr)
+    if len(items) > 10:
+        print(f"  - 还有 {len(items) - 10} 条未列出", file=sys.stderr)
+
+
+def price_with_slash_wrap(text: str, threshold_chars: int) -> str:
+    text = clean_price_text(text)
+    if not text or "/" not in text:
+        return text
+    if visual_len(text) <= threshold_chars:
+        return text
+    return "/\n".join(part.strip() for part in text.split("/") if part.strip())
 
 
 def build_price_rich_text(text: str, font_name: str, size: int, strike_pattern: str) -> CellRichText | str:
@@ -474,43 +625,67 @@ def build_price_rich_text(text: str, font_name: str, size: int, strike_pattern: 
         return ""
     normal = InlineFont(rFont=font_name, sz=size)
     strike = InlineFont(rFont=font_name, sz=size, strike=True)
-    pattern = re.compile(r"\(([^()]*)\)")
     price_pattern = re.compile(strike_pattern)
     rich = CellRichText()
-    pos = 0
     found = False
-    for match in pattern.finditer(text):
+
+    pos = 0
+    for match in price_pattern.finditer(text):
+        if not is_inside_parentheses(text, match.start()):
+            continue
         if match.start() > pos:
             rich.append(TextBlock(normal, text[pos : match.start()]))
-        inner = match.group(1)
-        if price_pattern.search(inner):
-            rich.append(TextBlock(normal, "("))
-            rich.append(TextBlock(strike, inner))
-            rich.append(TextBlock(normal, ")"))
-            found = True
-        else:
-            rich.append(TextBlock(normal, match.group(0)))
+        rich.append(TextBlock(strike, match.group(0)))
+        found = True
         pos = match.end()
     if pos < len(text):
         rich.append(TextBlock(normal, text[pos:]))
     return rich if found else text
 
 
-def set_cell_price(cell, text: str, configs: dict[str, dict[str, Any]], wrap_after_slash: bool = False) -> None:
+def is_inside_parentheses(text: str, index: int) -> bool:
+    depth = 0
+    for ch in text[:index]:
+        if ch in "(（":
+            depth += 1
+        elif ch in ")）" and depth > 0:
+            depth -= 1
+    return depth > 0
+
+
+def format_price_for_output(text: str, configs: dict[str, dict[str, Any]], wrap_after_slash: bool = False) -> CellRichText | str:
     rules = configs["report_rules"].get("priceRule", {})
     layout = configs["excel_layout"]
-    font_name = layout.get("fonts", {}).get("latinExcelName") or layout.get("fonts", {}).get("chineseExcelName")
+    font_name = layout.get("fonts", {}).get("chineseExcelName")
     size = layout.get("fonts", {}).get("defaultSize", 10)
-    value = price_with_slash_wrap(text) if wrap_after_slash else clean_text(text)
+    threshold = layout.get("summary", {}).get("priceWrapThresholdChars", 19)
+    value = price_with_slash_wrap(text, threshold) if wrap_after_slash else clean_price_text(text)
     if rules.get("strikeParenthesizedPrice", True):
-        cell.value = build_price_rich_text(value, font_name, size, rules.get("parenthesizedPricePattern", r"\d+(?:\.\d+)?\s*元"))
-    else:
-        cell.value = value
+        return build_price_rich_text(value, font_name, size, rules.get("parenthesizedPricePattern", r"\d+(?:\.\d+)?\s*元"))
+    return value
 
 
-def apply_base_style(cell, font_name: str, size: int = 10, bold: bool = False, fill: str | None = None, border: Border | None = None):
+def set_cell_price(cell, text: str, configs: dict[str, dict[str, Any]], wrap_after_slash: bool = False) -> None:
+    layout = configs["excel_layout"]
+    font_name = layout.get("fonts", {}).get("chineseExcelName")
+    size = layout.get("fonts", {}).get("defaultSize", 10)
+    cell.font = Font(name=font_name, size=size, color="000000")
+    cell.value = format_price_for_output(text, configs, wrap_after_slash)
+
+
+def apply_base_style(
+    cell,
+    font_name: str,
+    size: int = 10,
+    bold: bool = False,
+    fill: str | None = None,
+    border: Border | None = None,
+    horizontal: str = "center",
+    vertical: str = "center",
+    wrap_text: bool = True,
+):
     cell.font = Font(name=font_name, size=size, bold=bold, color="000000")
-    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    cell.alignment = Alignment(horizontal=horizontal, vertical=vertical, wrap_text=wrap_text)
     if fill:
         cell.fill = PatternFill("solid", fgColor=fill)
     if border:
@@ -522,9 +697,13 @@ def merge_and_style(ws, range_ref: str, value: Any, font_name: str, size: int, b
     cell = ws[range_ref.split(":")[0]]
     cell.value = value
     apply_base_style(cell, font_name, size=size, bold=bold, fill=fill, border=border)
-    if border:
-        for row in ws[range_ref]:
-            for c in row:
+    for row in ws[range_ref]:
+        for c in row:
+            c.font = Font(name=font_name, size=size, bold=bold, color="000000")
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            if fill:
+                c.fill = PatternFill("solid", fgColor=fill)
+            if border:
                 c.border = border
 
 
@@ -545,22 +724,115 @@ def download_image(url: str, record_id: str, cache_dir: Path) -> Path | None:
         return None
 
 
-def add_image(ws, image_path: Path, anchor: str, height_cm: float, max_width_px: int) -> None:
+def add_logo(ws, layout: dict[str, Any]) -> None:
+    logo = layout.get("logo", {})
+    if not logo.get("path"):
+        return
+    logo_path = ROOT / logo["path"]
+    if not logo_path.exists():
+        print(f"WARNING: logo 不存在：{logo_path}", file=sys.stderr)
+        return
+    row_number = int(logo.get("row", 2))
+    merged_range = logo.get("mergedRange", "B:H")
+    start_col, end_col = merged_range.split(":")
+    range_ref = f"{start_col}{row_number}:{end_col}{row_number}"
+    if range_ref not in [str(rng) for rng in ws.merged_cells.ranges]:
+        ws.merge_cells(range_ref)
+    image = XLImage(str(logo_path))
+    target_height = cm_to_pixels(float(logo.get("heightCm", 2.0)))
+    ratio = image.width / image.height if image.height else 1
+    target_width = int(target_height * ratio)
+    image.width = target_width
+    image.height = target_height
+    merged_width = merged_range_width_px(ws, start_col, end_col)
+    row_height_px = points_to_pixels(ws.row_dimensions[row_number].height or cm_to_points(float(logo.get("heightCm", 2.0))))
+    col_offset = max(0, (merged_width - target_width) // 2)
+    row_offset = max(0, (row_height_px - target_height) // 2)
+    marker = AnchorMarker(
+        col=column_index_from_string(start_col) - 1,
+        colOff=pixels_to_emu(col_offset),
+        row=row_number - 1,
+        rowOff=pixels_to_emu(row_offset),
+    )
+    image.anchor = OneCellAnchor(
+        _from=marker,
+        ext=XDRPositiveSize2D(pixels_to_emu(target_width), pixels_to_emu(target_height)),
+    )
+    ws.add_image(image)
+
+
+def merged_range_width_px(ws, start_col: str, end_col: str) -> int:
+    start = column_index_from_string(start_col)
+    end = column_index_from_string(end_col)
+    total = 0
+    for idx in range(start, end + 1):
+        letter = get_column_letter(idx)
+        total += column_width_to_pixels(ws.column_dimensions[letter].width)
+    return total
+
+
+def add_image(
+    ws,
+    image_path: Path,
+    row_number: int,
+    layout: dict[str, Any],
+) -> None:
     try:
+        image_cfg = layout["image"]
         with PILImage.open(image_path) as pil:
             width, height = pil.size
-        target_height = cm_to_pixels(height_cm)
+        target_height = cm_to_pixels(image_cfg["heightCm"])
         target_width = int(width * target_height / height) if height else target_height
+        max_width_px = image_cfg.get("maxWidthPx", 520)
         if target_width > max_width_px:
             target_width = max_width_px
-            target_height = int(height * target_width / width) if width else cm_to_pixels(height_cm)
+            target_height = int(height * target_width / width) if width else cm_to_pixels(image_cfg["heightCm"])
         image = XLImage(str(image_path))
         image.height = target_height
         image.width = target_width
-        image.anchor = anchor
+        anchor_col = image_cfg.get("anchorColumn", "C")
+        if image_cfg.get("centerInMergedCell", False):
+            merged_range = image_cfg.get("mergedRange", "C:H")
+            start_col, end_col = merged_range.split(":")
+            merged_width = merged_range_width_px(ws, start_col, end_col)
+            row_height_px = points_to_pixels(ws.row_dimensions[row_number].height or cm_to_points(image_cfg["heightCm"]))
+            padding = int(image_cfg.get("paddingPx", 8))
+            col_offset = max(padding, (merged_width - target_width) // 2)
+            row_offset = max(padding, (row_height_px - target_height) // 2)
+            marker = AnchorMarker(
+                col=column_index_from_string(start_col) - 1,
+                colOff=pixels_to_emu(col_offset),
+                row=row_number - 1,
+                rowOff=pixels_to_emu(row_offset),
+            )
+            image.anchor = OneCellAnchor(
+                _from=marker,
+                ext=XDRPositiveSize2D(pixels_to_emu(target_width), pixels_to_emu(target_height)),
+            )
+        else:
+            image.anchor = f"{anchor_col}{row_number}"
         ws.add_image(image)
     except Exception as exc:
         print(f"WARNING: 图片插入失败：{image_path} {exc}", file=sys.stderr)
+
+
+def apply_page_fill_and_fonts(ws, layout: dict[str, Any], max_row: int) -> None:
+    page_fill = layout.get("pageFill", {})
+    col_range = page_fill.get("columns", "A:I")
+    start_col, end_col = col_range.split(":")
+    start_idx = column_index_from_string(start_col)
+    end_idx = column_index_from_string(end_col)
+    fill_color = page_fill.get("fill", "FFFFFF")
+    default_font = page_fill.get("defaultFont") or layout["fonts"]["chineseExcelName"]
+    default_size = layout["fonts"].get("defaultSize", 10)
+    default_names = {None, "Calibri", "宋体", "SimSun", "Arial"}
+    for row in range(1, max_row + 1):
+        for col in range(start_idx, end_idx + 1):
+            cell = ws.cell(row, col)
+            if cell.fill.fill_type is None:
+                cell.fill = PatternFill("solid", fgColor=fill_color)
+            if cell.font.name in default_names:
+                cell.font = Font(name=default_font, size=default_size, color="000000")
 
 
 def build_workbook(
@@ -577,23 +849,24 @@ def build_workbook(
     fonts = layout["fonts"]
     heights = layout["rowHeights"]
     chinese_font = fonts["chineseExcelName"]
-    latin_font = fonts["latinExcelName"]
+    latin_font = chinese_font
     thin = Side(style="thin", color="000000")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
     wb = Workbook()
+    wb._named_styles["Normal"].font = Font(name=chinese_font, size=fonts["defaultSize"], color="000000")
     ws = wb.active
     ws.title = layout["worksheetName"]
     ws.sheet_view.showGridLines = False
 
-    for col, width in layout["columns"].items():
-        ws.column_dimensions[col].width = width
+    apply_column_widths(ws, layout)
 
     ws.row_dimensions[2].height = heights["topSpacer"]
-    merge_and_style(ws, "B3:H3", format_title_date(start, end, layout["titleTemplate"]), chinese_font, fonts["titleSize"], True, colors["white"], None)
+    add_logo(ws, layout)
+    merge_and_style(ws, "B3:H3", format_title_date(start, end, layout["titleTemplate"]), chinese_font, fonts["titleSize"], False, colors["white"], None)
     ws.row_dimensions[3].height = heights["title"]
     merge_and_style(ws, "B5:H5", layout["introText"], chinese_font, fonts["introSize"], False, colors["white"], None)
-    ws["B5"].alignment = Alignment(horizontal="left", vertical="center")
+    ws["B5"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
     ws.row_dimensions[5].height = heights["intro"]
 
     header_row = layout["summary"]["headerRow"]
@@ -630,29 +903,34 @@ def build_workbook(
         for record in brand_records:
             ws[f"D{row}"] = record.category
             ws[f"E{row}"] = record.product_name
-            ws[f"F{row}"] = record.launch_date
-            if record.launch_date:
-                ws[f"F{row}"].number_format = "m/d"
+            ws[f"F{row}"] = f"{record.launch_date.month}月{record.launch_date.day}日" if record.launch_date else ""
+            ws[f"F{row}"].number_format = "@"
             set_cell_price(ws[f"G{row}"], record.price, configs, wrap_after_slash=True)
             ws[f"H{row}"] = record.remark
+            no_wrap_columns = layout["summary"].get("noWrapColumns", [])
+            no_wrap_by_col = {"D": "category", "E": "productName"}
             for col in ("D", "E", "F", "G", "H"):
-                apply_base_style(ws[f"{col}{row}"], chinese_font if col in ("D", "E", "H") else latin_font, border=border)
-            ws.row_dimensions[row].height = heights["summaryWrapped"] if "\n" in str(ws[f"G{row}"].value) else heights["summaryDefault"]
+                wrap = no_wrap_by_col.get(col) not in no_wrap_columns
+                apply_base_style(ws[f"{col}{row}"], chinese_font, border=border, wrap_text=wrap)
+            ws.row_dimensions[row].height = row_height_for_line_count(2 if "\n" in str(ws[f"G{row}"].value) else 1, layout)
             row += 1
 
-    note_row = row + 1
+    note_row = row
     merge_and_style(
         ws,
         f"B{note_row}:H{note_row}",
         layout["trackedBrandsPrefix"] + "、".join(brands),
         chinese_font,
-        fonts["defaultSize"],
+        fonts.get("trackedBrandsSize", 9),
         False,
         colors["white"],
         None,
     )
+    for col in range(column_index_from_string("B"), column_index_from_string("H") + 1):
+        cell = ws.cell(note_row, col)
+        cell.font = Font(name=chinese_font, size=fonts.get("trackedBrandsSize", 9), color="000000")
     ws[f"B{note_row}"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-    ws.row_dimensions[note_row].height = heights["summaryWrapped"]
+    ws.row_dimensions[note_row].height = row_height_for_line_count(1, layout)
 
     detail_row = note_row + layout["details"]["blankRowsAfterSummary"] + 1
     image_cache = output_path.parent / "_image_cache"
@@ -682,7 +960,14 @@ def build_workbook(
             }
             for key, label in layout["details"]["rowsPerProduct"]:
                 ws[f"B{detail_row}"] = label
-                apply_base_style(ws[f"B{detail_row}"], chinese_font, bold=True, fill=colors["detailLabelFill"], border=border)
+                apply_base_style(
+                    ws[f"B{detail_row}"],
+                    chinese_font,
+                    bold=True,
+                    fill=colors["detailLabelFill"],
+                    border=border,
+                    wrap_text=layout["details"].get("labelWrapText", False),
+                )
                 value_range = f"C{detail_row}:H{detail_row}"
                 ws.merge_cells(value_range)
                 value_cell = ws[f"C{detail_row}"]
@@ -691,37 +976,53 @@ def build_workbook(
                 else:
                     value_cell.value = row_values.get(key, "")
                 apply_base_style(value_cell, chinese_font, bold=key == "productName", fill=colors["detailLabelFill"] if key == "productName" else None, border=border)
-                value_cell.alignment = Alignment(horizontal="left" if key in ("sellingPoint", "ingredients") else "center", vertical="center", wrap_text=True)
+                if key == "sellingPoint":
+                    horizontal = "left"
+                elif key == "ingredients":
+                    horizontal = layout["details"].get("ingredientsAlignment", "center")
+                else:
+                    horizontal = "center"
+                value_cell.alignment = Alignment(horizontal=horizontal, vertical="center", wrap_text=True)
                 for merged_row in ws[value_range]:
                     for cell in merged_row:
+                        cell.font = Font(name=chinese_font, size=fonts["defaultSize"], bold=key == "productName", color="000000")
+                        cell.alignment = Alignment(horizontal=horizontal, vertical="center", wrap_text=True)
                         cell.border = border
                         if key == "productName":
                             cell.fill = PatternFill("solid", fgColor=colors["detailLabelFill"])
 
                 if key == "appearanceImages":
-                    ws.row_dimensions[detail_row].height = cm_to_points(layout["image"]["heightCm"])
+                    ws.row_dimensions[detail_row].height = layout["image"].get("rowHeightPt", 120.0)
                     if record.image_urls:
                         image_path = download_image(record.image_urls[0], record.record_id, image_cache)
                         if image_path:
                             add_image(
                                 ws,
                                 image_path,
-                                f"{layout['image']['anchorColumn']}{detail_row}",
-                                layout["image"]["heightCm"],
-                                layout["image"].get("maxWidthPx", 520),
+                                detail_row,
+                                layout,
                             )
-                elif key in ("sellingPoint", "ingredients"):
+                elif key == "sellingPoint":
                     text = str(row_values.get(key, ""))
                     ws.row_dimensions[detail_row].height = estimate_row_height(
                         text,
-                        70,
-                        heights["detailTextMin"],
+                        heights.get("detailSellingPointChars", 75),
+                        layout,
+                        heights["detailTextMax"],
+                    )
+                elif key == "ingredients":
+                    text = str(row_values.get(key, ""))
+                    ws.row_dimensions[detail_row].height = estimate_row_height(
+                        text,
+                        120,
+                        layout,
                         heights["detailTextMax"],
                     )
                 else:
-                    ws.row_dimensions[detail_row].height = heights["detailDefault"]
+                    ws.row_dimensions[detail_row].height = row_height_for_line_count(1, layout)
                 detail_row += 1
 
+    apply_page_fill_and_fonts(ws, layout, max(detail_row, ws.max_row))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
 

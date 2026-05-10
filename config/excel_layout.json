@@ -6,6 +6,33 @@
   "titleTemplate": "竞品新品周报{start_m}.{start_d}-{end_m}.{end_d}",
   "introText": "以下是过去一周关注品牌的新品信息，如果有需要关注的单品，请告知，谢谢！",
   "trackedBrandsPrefix": "*关注品牌包括：",
+  "pageFill": {
+    "columns": "A:I",
+    "fill": "FFFFFF",
+    "defaultFont": "方正FW筑紫黑简 R"
+  },
+  "pageWidthCm": 18.0,
+  "columnWidthPolicy": {
+    "range": "B:H",
+    "totalWidthCm": 18.0,
+    "fixedColumns": {
+      "B": 12.0,
+      "C": 8.0,
+      "D": 7.0,
+      "E": 13.0,
+      "F": 9.0,
+      "G": 19.0
+    },
+    "autoFillColumn": "H",
+    "pixelScale": 7.0,
+    "pixelPadding": 5.0
+  },
+  "logo": {
+    "path": "assets/logo/report_logo.png",
+    "row": 2,
+    "mergedRange": "B:H",
+    "heightCm": 2.0
+  },
   "summary": {
     "titleRow": 3,
     "introRow": 5,
@@ -27,28 +54,34 @@
       "launchDate": "上市时间",
       "price": "价格",
       "remark": "备注"
-    }
+    },
+    "dateFormat": "m月d日",
+    "noWrapColumns": ["category", "productName"],
+    "priceWrapThresholdChars": 19
   },
   "details": {
     "blankRowsAfterSummary": 1,
     "brandHeaderTemplate": "{brand}本周新品数量：{count}个",
     "labelColumn": "B",
     "valueRange": "C:H",
+    "labelWrapText": false,
+    "ingredientsAlignment": "center",
     "rowsPerProduct": [
       ["productName", "新品名称"],
       ["series", "产品系列归属"],
       ["sellingPoint", "产品卖点介绍"],
-      ["price", "产品属性"],
+      ["price", "产品价格"],
       ["ingredients", "原料构成"],
       ["appearanceImages", "产品外观"]
     ]
   },
   "fonts": {
     "chineseExcelName": "方正FW筑紫黑简 R",
-    "latinExcelName": "Heytea Sans Serif Regular",
+    "latinExcelName": "方正FW筑紫黑简 R",
     "defaultSize": 10,
     "titleSize": 16,
-    "introSize": 12
+    "introSize": 12,
+    "trackedBrandsSize": 9
   },
   "colors": {
     "white": "FFFFFF",
@@ -60,13 +93,14 @@
   },
   "columns": {
     "A": 6.0,
-    "B": 11.6667,
-    "C": 7.5,
-    "D": 5.8333,
-    "E": 12.5,
-    "F": 8.1333,
-    "G": 20.4083,
-    "H": 15.8333
+    "B": 12.0,
+    "C": 8.0,
+    "D": 7.0,
+    "E": 13.0,
+    "F": 9.0,
+    "G": 19.0,
+    "H": 24.14,
+    "I": 6.0
   },
   "rowHeights": {
     "topSpacer": 62.35,
@@ -75,20 +109,40 @@
     "summaryHeader": 30.5,
     "summaryDefault": 16.25,
     "summaryWrapped": 30.5,
+    "trackedBrands": 16.25,
     "detailHeader": 16.25,
     "detailDefault": 16.25,
-    "detailTextMin": 30.5,
-    "detailTextMax": 72.0,
-    "imageCm": 4.0
+    "detailSellingPointMin": 31.0,
+    "detailSellingPointChars": 75,
+    "detailTextMin": 16.25,
+    "detailTextMax": 90.0,
+    "imageCm": 4.0,
+    "imagePaddingPt": 10.0
+  },
+  "rowHeightRule": {
+    "singleLinePt": 16.8,
+    "additionalLinePt": 15.0
+  },
+  "textWrap": {
+    "punctuationRules": {
+      "avoidLineStart": "，。；：！？、）】》",
+      "avoidLineEnd": "（【《"
+    }
   },
   "image": {
     "heightCm": 4.0,
+    "rowHeightPt": 120.0,
     "anchorColumn": "C",
-    "maxWidthPx": 520
+    "mergedRange": "C:H",
+    "maxWidthPx": 520,
+    "paddingPx": 8,
+    "centerInMergedCell": true,
+    "columnPixelScale": 7.0
   },
   "notes": [
-    "汇总表价格列换行只在 / 后插入换行。",
+    "汇总表价格列只有在整段价格超过阈值时才在 / 后插入单个换行。",
+    "A:I 无业务底纹区域统一填充白色，并应用配置字体，避免回退到宋体。",
     "行高按内容估算到尽量显示完整内容，同时用 detailTextMax 防止长文本过高。",
-    "产品外观图片高度固定为 4cm，等比缩放。"
+    "产品外观图片视觉高度固定为 4cm，行高额外增加内边距，等比缩放并在合并单元格内居中。"
   ]
 }

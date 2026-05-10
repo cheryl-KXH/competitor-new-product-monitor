@@ -30,6 +30,7 @@ competitor-new-product-monitor/
 - `config/report_rules.json`：这份周报的业务规则。
 - `config/excel_layout.json`：Excel 怎么排版、数据写到哪里。
 - `config/font_files.json`：内部中英文字体文件路径配置。
+- `assets/logo/`：周报顶部 logo 本地放置位置。logo 是内部专用资产，不提交、不上传外部。
 - `assets/fonts/`：字体文件本地放置位置。字体不要提交、不要上传外部。
 - `scripts/generate_weekly_report.py`：生成脚本。
 - `outputs/`：默认 Excel 输出目录。
@@ -68,7 +69,7 @@ cp config/dingtalk.example.json config/dingtalk.json
 本项目使用以下内部字体：
 
 - 中文：`方正FW筑紫黑简 R.ttf`
-- 英文/数字：`Heytea Sans Serif Regular.otf`
+- 英文/数字：暂时也统一使用中文字体 `方正FW筑紫黑简 R.ttf`。`Heytea Sans Serif Regular.otf` 保留在配置中，后续需要时再启用。
 
 默认字体路径写在 `config/font_files.json`：
 
@@ -83,7 +84,7 @@ cp config/dingtalk.example.json config/dingtalk.json
 }
 ```
 
-也可以把字体文件放到 `assets/fonts/`，再把 `projectPath` 改成实际文件名。字体是内部独家字体，不提交、不上传外部。Excel 文件只记录字体名称，不会嵌入字体文件，打开 Excel 的电脑也需要安装对应字体。
+也可以把字体文件放到 `assets/fonts/`，再把 `projectPath` 改成实际文件名。字体是内部独家字体，不提交、不上传外部。Excel 文件只记录字体名称，不会嵌入字体文件，打开 Excel 的电脑也需要安装对应字体。现阶段生成脚本统一使用中文字体，避免英文字体在 Excel 中不生效时回退到宋体。
 
 ## CLI 命令
 
@@ -158,11 +159,27 @@ python scripts/generate_weekly_report.py --explain-config
 价格规则：
 
 - 价格文本中括号里的价格加删除线，例如 `15元(17元)(中杯)` 只把 `17元` 加删除线。
-- 汇总表价格列如果需要换行，只在 `/` 后换行，不在普通文字中间断开。
+- 只要价格片段出现在括号内就会加删除线，例如 `18元(20元)(中杯)/22元(24元)(大杯)` 中的 `20元` 和 `24元` 都会加删除线。
+- 汇总表价格列如果需要换行，只在 `/` 后插入一个换行，不在普通文字中间断开。
+- 脚本会先清理价格里的连续空行，避免换行后出现空白行。
+
+日期规则：
+
+- 汇总表“上市时间”默认显示为 `5月4日` 这类中文日期。
+- 如需调整，改 `config/excel_layout.json` 的 `summary.dateFormat`，再让 Codex 同步脚本规则。
+
+Logo 和页面底色：
+
+- 顶部 logo 来自 `assets/logo/report_logo.png`。
+- logo 默认放在合并后的 `B2:H2` 区域中间，高度约 `2cm`。
+- 如需替换 logo，保持文件名不变即可，或修改 `config/excel_layout.json` 的 `logo.path`。
+- logo 是内部专用资产，已在 `.gitignore` 中忽略，不要提交到 git 或上传外部平台。
+- A:I 的无业务底纹区域会统一填充白色，并应用配置字体，避免 Excel 回退到宋体/默认字体。
 
 图片和行高：
 
 - 产品外观图片高度统一 `4cm`。
+- 图片会在“产品外观”合并单元格内居中；行高会在 4cm 图片高度外额外加内边距，避免图片挡住边框。
 - 表格行高按内容估算到合适状态，尽量完整显示内容，并保留最大行高上限。
 
 ## 用自然语言调整配置
@@ -173,6 +190,9 @@ python scripts/generate_weekly_report.py --explain-config
 - “品类优先级改成柠檬茶 > 果蔬茶 > 茶特调 > 主品类。”
 - “产品图片高度改成 5cm。”
 - “卖点介绍行高上限放宽到 90。”
+- “顶部 logo 改成 assets/logo/new_logo.png。”
+- “上市时间改成 2026年5月4日 这种格式。”
+- “产品价格行改回产品属性。”
 - “钉钉字段‘主品类’改名叫‘核心品类’，同步字段映射。”
 
 一般对应关系：
