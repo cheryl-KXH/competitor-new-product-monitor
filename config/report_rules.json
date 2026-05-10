@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "description": "这份周报的业务规则。后续可用自然语言要求 Codex 修改本文件。",
+  "defaultDateWindow": {
+    "type": "last_complete_saturday_to_friday",
+    "startWeekday": "saturday",
+    "endWeekday": "friday"
+  },
+  "defaultBrands": [
+    "霸王茶姬",
+    "茶百道",
+    "古茗",
+    "奈雪的茶",
+    "乐乐茶",
+    "阿嬷手作",
+    "去茶山",
+    "爷爷不泡茶",
+    "瑞幸",
+    "上山喝茶",
+    "茉莉奶白"
+  ],
+  "recordFilter": {
+    "dateField": "launchDate",
+    "brandField": "brand"
+  },
+  "categoryRule": {
+    "description": "品类只显示一个。优先级：茶特调 > 果蔬茶 > 柠檬茶 > 主品类。",
+    "additionalField": "additionalCategory",
+    "mainField": "mainCategory",
+    "priority": ["茶特调", "果蔬茶", "柠檬茶"],
+    "fallback": "mainCategory",
+    "separator": "、"
+  },
+  "remarkRule": {
+    "order": ["returnStatus", "collaboration", "remark"],
+    "separator": "，",
+    "emptyText": "/",
+    "returnStatus": {
+      "showValue": "回归",
+      "truthyValues": ["回归", "是", "true", "TRUE", "1"],
+      "ignoredValues": ["上新", "否", "false", "FALSE", "0"]
+    },
+    "collaboration": {
+      "suffix": "联名"
+    }
+  },
+  "priceRule": {
+    "strikeParenthesizedPrice": true,
+    "parenthesizedPricePattern": "\\d+(?:\\.\\d+)?\\s*元",
+    "summaryWrapAfterSlash": true
+  },
+  "sort": {
+    "brandOrder": "defaultBrands",
+    "withinBrand": ["launchDate", "productName"]
+  }
+}

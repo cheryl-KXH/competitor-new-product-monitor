@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "description": "钉钉 AI 表字段到脚本标准字段的翻译规则。字段 ID 变更时优先改 fieldId；字段改名时改 fieldNames。",
+  "standardFields": {
+    "brand": {
+      "label": "品牌",
+      "fieldId": "01ZM8y7",
+      "fieldNames": ["品牌"],
+      "extract": "select_name",
+      "required": true
+    },
+    "productName": {
+      "label": "新品",
+      "fieldId": "mHe1U1b",
+      "fieldNames": ["新品", "新品名称"],
+      "extract": "text",
+      "required": true
+    },
+    "launchDate": {
+      "label": "上市日期",
+      "fieldId": "mKUEya0",
+      "fieldNames": ["上市日期", "上市时间"],
+      "extract": "date",
+      "required": true
+    },
+    "price": {
+      "label": "价格",
+      "fieldId": "S25BNzT",
+      "fieldNames": ["价格"],
+      "extract": "rich_text_markdown",
+      "required": false
+    },
+    "mainCategory": {
+      "label": "主品类",
+      "fieldId": "",
+      "fieldNames": ["主品类", "品类"],
+      "extract": "select_name",
+      "required": false
+    },
+    "additionalCategory": {
+      "label": "附加品类",
+      "fieldId": "",
+      "fieldNames": ["附加品类"],
+      "extract": "multi_select_names",
+      "required": false
+    },
+    "series": {
+      "label": "系列归属",
+      "fieldId": "YyMvdeQ",
+      "fieldNames": ["系列归属", "产品系列", "产品系列归属"],
+      "extract": "text",
+      "required": false
+    },
+    "sellingPoint": {
+      "label": "产品卖点介绍",
+      "fieldId": "YvhSNac",
+      "fieldNames": ["产品卖点介绍", "卖点介绍", "产品卖点"],
+      "extract": "text",
+      "required": false
+    },
+    "ingredients": {
+      "label": "原料构成",
+      "fieldId": "hvyPmEb",
+      "fieldNames": ["原料构成"],
+      "extract": "text",
+      "required": false
+    },
+    "appearanceImages": {
+      "label": "产品外观",
+      "fieldId": "bF5E1o2",
+      "fieldNames": ["产品外观"],
+      "extract": "attachment_image_urls",
+      "required": false
+    },
+    "returnStatus": {
+      "label": "回归",
+      "fieldId": "",
+      "fieldNames": ["回归"],
+      "extract": "generic",
+      "required": false
+    },
+    "collaboration": {
+      "label": "联名",
+      "fieldId": "kItU0JS",
+      "fieldNames": ["联名"],
+      "extract": "text",
+      "required": false
+    },
+    "remark": {
+      "label": "备注",
+      "fieldId": "0PXREzW",
+      "fieldNames": ["备注"],
+      "extract": "text",
+      "required": false
+    }
+  }
+}
