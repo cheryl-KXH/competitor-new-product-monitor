@@ -43,10 +43,11 @@ competitor-new-product-monitor/
 pip install -r requirements.txt
 ```
 
-如果本机已经通过 Codex 运行，也可以使用 Codex bundled Python：
+安装依赖后，可以运行配置校验：
 
 ```bash
-/Users/cheryl/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 scripts/generate_weekly_report.py --validate-config
+python3 scripts/generate_weekly_report.py --validate-config
+
 ```
 
 ## 配置钉钉连接
@@ -66,23 +67,24 @@ cp config/dingtalk.example.json config/dingtalk.json
 
 ## 字体配置
 
-本项目使用以下内部字体：
+本项目使用以下字体：
 
 - 中文：`方正FW筑紫黑简 R.ttf`
-- 英文/数字：暂时也统一使用中文字体 `方正FW筑紫黑简 R.ttf`。`Heytea Sans Serif Regular.otf` 保留在配置中，后续需要时再启用。
+- 英文/数字：暂时也统一使用中文字体 `方正FW筑紫黑简 R.ttf`
 
 默认字体路径写在 `config/font_files.json`：
+
+把字体文件放到 `assets/fonts/` 后，在 `config/font_files.json` 中配置相对路径，例如：
 
 ```json
 {
   "chineseFont": {
-    "sourcePath": "/Users/cheryl/Downloads/字体&办公模版/方正FW筑紫黑简 R.ttf"
+    "projectPath": "assets/fonts/方正FW筑紫黑简 R.ttf"
   },
   "latinFont": {
-    "sourcePath": "/Users/cheryl/Downloads/字体&办公模版/Heytea Sans Serif Regular.otf"
+    "projectPath": "assets/fonts/方正FW筑紫黑简 R.ttf"
   }
 }
-```
 
 也可以把字体文件放到 `assets/fonts/`，再把 `projectPath` 改成实际文件名。字体是内部独家字体，不提交、不上传外部。Excel 文件只记录字体名称，不会嵌入字体文件，打开 Excel 的电脑也需要安装对应字体。现阶段生成脚本统一使用中文字体，避免英文字体在 Excel 中不生效时回退到宋体。
 
