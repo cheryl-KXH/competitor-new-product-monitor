@@ -497,35 +497,85 @@ def column_width_to_pixels(width: float | None) -> int:
     return int(round(width * 7.0 + 5))
 
 
-def column_width_to_pixels_with_policy(width: float | None, layout: dict[str, Any]) -> int:
-    policy = layout.get("columnWidthPolicy", {})
-    scale = float(policy.get("pixelScale", layout.get("image", {}).get("columnPixelScale", 7.0)))
-    padding = float(policy.get("pixelPadding", 5.0))
+def column_width_to_pixels_with_layout(width: float | None, layout: dict[str, Any]) -> int:
+    auto_fit = layout.get("autoFit", {})
+    scale = float(auto_fit.get("columnWidthPixelScale", 7.0))
+    padding = float(auto_fit.get("columnWidthPixelPadding", 5.0))
     if not width:
         return int(round(8.43 * scale + padding))
     return int(round(width * scale + padding))
 
 
 def pixels_to_column_width(pixels: float, layout: dict[str, Any]) -> float:
-    policy = layout.get("columnWidthPolicy", {})
-    scale = float(policy.get("pixelScale", layout.get("image", {}).get("columnPixelScale", 7.0)))
-    padding = float(policy.get("pixelPadding", 5.0))
+    auto_fit = layout.get("autoFit", {})
+    scale = float(auto_fit.get("columnWidthPixelScale", 7.0))
+    padding = float(auto_fit.get("columnWidthPixelPadding", 5.0))
     return max(1.0, round((pixels - padding) / scale, 2))
 
 
-def apply_column_widths(ws, layout: dict[str, Any]) -> None:
-    columns = dict(layout.get("columns", {}))
-    policy = layout.get("columnWidthPolicy", {})
-    auto_col = policy.get("autoFillColumn")
-    if auto_col:
-        total_px = cm_to_pixels(float(policy.get("totalWidthCm", layout.get("pageWidthCm", 18.0))))
-        fixed = dict(policy.get("fixedColumns", {}))
-        fixed_px = sum(column_width_to_pixels_with_policy(float(width), layout) for width in fixed.values())
-        auto_px = max(30, total_px - fixed_px)
-        columns.update(fixed)
-        columns[auto_col] = pixels_to_column_width(auto_px, layout)
+def text_to_column_width_chars(text: str, padding_chars: float = 0.0) -> float:
+    return max(1.0, visual_len(text) + padding_chars)
+
+
+def price_blocks(text: str) -> list[str]:
+    value = clean_price_text(text)
+    return [part.strip() for part in value.split("/") if part.strip()] or ([value] if value else [])
+
+
+def compute_column_widths(records: list[ReportRecord], layout: dict[str, Any]) -> dict[str, float]:
+    rules = layout.get("columnWidthRules", {})
+    widths: dict[str, float] = {}
+    widths.update({col: float(width) for col, width in rules.get("sideColumnsChars", {}).items()})
+    widths.update({col: float(width) for col, width in rules.get("fixedColumnsChars", {}).items()})
+
+    padding = rules.get("paddingChars", {})
+    mins = rules.get("minColumnsChars", {})
+    maxes = rules.get("maxColumnsChars", {})
+
+    longest_product = max((record.product_name for record in records), key=visual_len, default="")
+    e_width = text_to_column_width_chars(longest_product, float(padding.get("E", 2.0)))
+    e_width = max(float(mins.get("E", 1.0)), e_width)
+    if "E" in maxes:
+        e_width = min(float(maxes["E"]), e_width)
+    widths["E"] = round(e_width, 2)
+
+    longest_price_block = ""
+    for record in records:
+        for block in price_blocks(record.price):
+            if visual_len(block) > visual_len(longest_price_block):
+                longest_price_block = block
+    g_width = text_to_column_width_chars(longest_price_block, float(padding.get("G", 2.0)))
+    g_width = max(float(mins.get("G", 1.0)), g_width)
+    if "G" in maxes:
+        g_width = min(float(maxes["G"]), g_width)
+    widths["G"] = round(g_width, 2)
+
+    table_range = rules.get("tableRange", "B:H")
+    start_col, end_col = table_range.split(":")
+    table_cols = [get_column_letter(idx) for idx in range(column_index_from_string(start_col), column_index_from_string(end_col) + 1)]
+    fill_col = rules.get("fillRemainingColumn", "H")
+    total_px = cm_to_pixels(float(rules.get("totalTableWidthCm", 18.0)))
+    used_px = sum(column_width_to_pixels_with_layout(widths.get(col), layout) for col in table_cols if col != fill_col)
+    min_fill = float(mins.get(fill_col, 1.0))
+    remaining_width = pixels_to_column_width(total_px - used_px, layout)
+    if remaining_width < min_fill:
+        if rules.get("allowOverflowTableWidth", True):
+            print(
+                f"WARNING: E/G 自动列宽较大，{fill_col} 列按最小宽度 {min_fill} 设置，B:H 总宽会超过 {rules.get('totalTableWidthCm', 18.0)}cm。",
+                file=sys.stderr,
+            )
+            remaining_width = min_fill
+        else:
+            remaining_width = max(1.0, remaining_width)
+    widths[fill_col] = round(remaining_width, 2)
+    return widths
+
+
+def apply_column_widths(ws, layout: dict[str, Any], records: list[ReportRecord]) -> dict[str, float]:
+    columns = compute_column_widths(records, layout)
     for col, width in columns.items():
         ws.column_dimensions[col].width = float(width)
+    return columns
 
 
 def visual_len(text: str) -> int:
@@ -544,17 +594,33 @@ def estimate_line_count(text: str, col_chars: float) -> int:
 
 
 def row_height_for_line_count(line_count: int, layout: dict[str, Any], max_height: float | None = None) -> float:
-    rule = layout.get("rowHeightRule", {})
-    single = float(rule.get("singleLinePt", 16.8))
-    additional = float(rule.get("additionalLinePt", 15.0))
+    auto_fit = layout.get("autoFit", layout.get("rowHeightRule", {}))
+    single = float(auto_fit.get("singleLineHeightPt", auto_fit.get("singleLinePt", 16.8)))
+    additional = float(auto_fit.get("additionalLineHeightPt", auto_fit.get("additionalLinePt", 15.0)))
     height = single if line_count <= 1 else single + (line_count - 1) * additional
     if max_height is not None:
         height = min(max_height, height)
     return height
 
 
-def estimate_row_height(text: str, col_chars: float, layout: dict[str, Any], max_height: float | None = None) -> float:
-    return row_height_for_line_count(estimate_line_count(text, col_chars), layout, max_height)
+def estimate_auto_row_height(
+    cells: list[tuple[str, float, bool]],
+    layout: dict[str, Any],
+    min_height: float | None = None,
+    max_height: float | None = None,
+    extra_padding: float = 0.0,
+) -> float:
+    auto_fit = layout.get("autoFit", {})
+    max_lines = 1
+    for text, width_chars, wrap in cells:
+        if wrap:
+            max_lines = max(max_lines, estimate_line_count(text, width_chars))
+        else:
+            max_lines = max(max_lines, max(1, str(text or "").count("\n") + 1))
+    height = row_height_for_line_count(max_lines, layout, max_height) + extra_padding
+    if min_height is None:
+        min_height = float(auto_fit.get("minTextRowHeightPt", 16.8))
+    return max(min_height, height)
 
 
 def clean_price_text(text: str) -> str:
@@ -615,8 +681,6 @@ def price_with_slash_wrap(text: str, threshold_chars: int) -> str:
     text = clean_price_text(text)
     if not text or "/" not in text:
         return text
-    if visual_len(text) <= threshold_chars:
-        return text
     return "/\n".join(part.strip() for part in text.split("/") if part.strip())
 
 
@@ -658,7 +722,7 @@ def format_price_for_output(text: str, configs: dict[str, dict[str, Any]], wrap_
     layout = configs["excel_layout"]
     font_name = layout.get("fonts", {}).get("chineseExcelName")
     size = layout.get("fonts", {}).get("defaultSize", 10)
-    threshold = layout.get("summary", {}).get("priceWrapThresholdChars", 19)
+    threshold = layout.get("_computedPriceWrapThresholdChars", layout.get("summary", {}).get("priceWrapThresholdChars", 19))
     value = price_with_slash_wrap(text, threshold) if wrap_after_slash else clean_price_text(text)
     if rules.get("strikeParenthesizedPrice", True):
         return build_price_rich_text(value, font_name, size, rules.get("parenthesizedPricePattern", r"\d+(?:\.\d+)?\s*元"))
@@ -692,19 +756,73 @@ def apply_base_style(
         cell.border = border
 
 
-def merge_and_style(ws, range_ref: str, value: Any, font_name: str, size: int, bold: bool, fill: str | None, border: Border | None):
-    ws.merge_cells(range_ref)
-    cell = ws[range_ref.split(":")[0]]
-    cell.value = value
-    apply_base_style(cell, font_name, size=size, bold=bold, fill=fill, border=border)
+def style_range(
+    ws,
+    range_ref: str,
+    font_name: str,
+    size: int,
+    bold: bool,
+    fill: str | None,
+    border: Border | None,
+    horizontal: str = "center",
+    vertical: str = "center",
+    wrap_text: bool = True,
+    outer_border_only: bool = False,
+) -> None:
+    range_cells = ws[range_ref]
+    min_row = range_cells[0][0].row
+    max_row = range_cells[-1][0].row
+    min_col = range_cells[0][0].column
+    max_col = range_cells[0][-1].column
     for row in ws[range_ref]:
         for c in row:
             c.font = Font(name=font_name, size=size, bold=bold, color="000000")
-            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c.alignment = Alignment(horizontal=horizontal, vertical=vertical, wrap_text=wrap_text)
             if fill:
                 c.fill = PatternFill("solid", fgColor=fill)
             if border:
-                c.border = border
+                if outer_border_only:
+                    c.border = Border(
+                        left=border.left if c.column == min_col else Side(style=None),
+                        right=border.right if c.column == max_col else Side(style=None),
+                        top=border.top if c.row == min_row else Side(style=None),
+                        bottom=border.bottom if c.row == max_row else Side(style=None),
+                    )
+                else:
+                    c.border = border
+
+
+def write_across_range(
+    ws,
+    range_ref: str,
+    value: Any,
+    font_name: str,
+    size: int,
+    bold: bool,
+    fill: str | None,
+    border: Border | None,
+    horizontal: str = "centerContinuous",
+    vertical: str = "center",
+    wrap_text: bool = True,
+    outer_border_only: bool = True,
+) -> None:
+    start_ref = range_ref.split(":")[0]
+    cell = ws[start_ref]
+    cell.value = value
+    style_range(
+        ws,
+        range_ref,
+        font_name,
+        size,
+        bold,
+        fill,
+        border,
+        horizontal=horizontal,
+        vertical=vertical,
+        wrap_text=wrap_text,
+        outer_border_only=outer_border_only,
+    )
+    cell.alignment = Alignment(horizontal=horizontal, vertical=vertical, wrap_text=wrap_text)
 
 
 def download_image(url: str, record_id: str, cache_dir: Path) -> Path | None:
@@ -733,26 +851,24 @@ def add_logo(ws, layout: dict[str, Any]) -> None:
         print(f"WARNING: logo 不存在：{logo_path}", file=sys.stderr)
         return
     row_number = int(logo.get("row", 2))
-    merged_range = logo.get("mergedRange", "B:H")
-    start_col, end_col = merged_range.split(":")
-    range_ref = f"{start_col}{row_number}:{end_col}{row_number}"
-    if range_ref not in [str(rng) for rng in ws.merged_cells.ranges]:
-        ws.merge_cells(range_ref)
+    logo_range = logo.get("range", logo.get("mergedRange", "B:H"))
+    start_col, end_col = logo_range.split(":")
     image = XLImage(str(logo_path))
     target_height = cm_to_pixels(float(logo.get("heightCm", 2.0)))
     ratio = image.width / image.height if image.height else 1
     target_width = int(target_height * ratio)
     image.width = target_width
     image.height = target_height
-    merged_width = merged_range_width_px(ws, start_col, end_col)
     row_height_px = points_to_pixels(ws.row_dimensions[row_number].height or cm_to_points(float(logo.get("heightCm", 2.0))))
-    col_offset = max(0, (merged_width - target_width) // 2)
-    row_offset = max(0, (row_height_px - target_height) // 2)
-    marker = AnchorMarker(
-        col=column_index_from_string(start_col) - 1,
-        colOff=pixels_to_emu(col_offset),
-        row=row_number - 1,
-        rowOff=pixels_to_emu(row_offset),
+    marker = range_center_anchor_marker(
+        ws,
+        start_col,
+        end_col,
+        row_number,
+        target_width,
+        target_height,
+        row_height_px,
+        layout,
     )
     image.anchor = OneCellAnchor(
         _from=marker,
@@ -761,14 +877,49 @@ def add_logo(ws, layout: dict[str, Any]) -> None:
     ws.add_image(image)
 
 
-def merged_range_width_px(ws, start_col: str, end_col: str) -> int:
+def column_range_width_px(ws, start_col: str, end_col: str, layout: dict[str, Any]) -> int:
     start = column_index_from_string(start_col)
     end = column_index_from_string(end_col)
     total = 0
     for idx in range(start, end + 1):
         letter = get_column_letter(idx)
-        total += column_width_to_pixels(ws.column_dimensions[letter].width)
+        total += column_width_to_pixels_with_layout(ws.column_dimensions[letter].width, layout)
     return total
+
+
+def range_center_anchor_marker(
+    ws,
+    start_col: str,
+    end_col: str,
+    row_number: int,
+    target_width_px: int,
+    target_height_px: int,
+    row_height_px: int,
+    layout: dict[str, Any],
+    padding_px: int = 0,
+) -> AnchorMarker:
+    start_idx = column_index_from_string(start_col)
+    end_idx = column_index_from_string(end_col)
+    range_width_px = column_range_width_px(ws, start_col, end_col, layout)
+    target_left_px = max(padding_px, (range_width_px - target_width_px) // 2)
+    target_top_px = max(padding_px, (row_height_px - target_height_px) // 2)
+
+    current_col_idx = start_idx
+    remaining_px = target_left_px
+    while current_col_idx < end_idx:
+        col_letter = get_column_letter(current_col_idx)
+        col_width_px = column_width_to_pixels_with_layout(ws.column_dimensions[col_letter].width, layout)
+        if remaining_px < col_width_px:
+            break
+        remaining_px -= col_width_px
+        current_col_idx += 1
+
+    return AnchorMarker(
+        col=current_col_idx - 1,
+        colOff=pixels_to_emu(remaining_px),
+        row=row_number - 1,
+        rowOff=pixels_to_emu(target_top_px),
+    )
 
 
 def add_image(
@@ -791,19 +942,21 @@ def add_image(
         image.height = target_height
         image.width = target_width
         anchor_col = image_cfg.get("anchorColumn", "C")
-        if image_cfg.get("centerInMergedCell", False):
-            merged_range = image_cfg.get("mergedRange", "C:H")
-            start_col, end_col = merged_range.split(":")
-            merged_width = merged_range_width_px(ws, start_col, end_col)
+        if image_cfg.get("centerInRange", image_cfg.get("centerInMergedCell", False)):
+            image_range = image_cfg.get("range", image_cfg.get("mergedRange", "C:H"))
+            start_col, end_col = image_range.split(":")
             row_height_px = points_to_pixels(ws.row_dimensions[row_number].height or cm_to_points(image_cfg["heightCm"]))
             padding = int(image_cfg.get("paddingPx", 8))
-            col_offset = max(padding, (merged_width - target_width) // 2)
-            row_offset = max(padding, (row_height_px - target_height) // 2)
-            marker = AnchorMarker(
-                col=column_index_from_string(start_col) - 1,
-                colOff=pixels_to_emu(col_offset),
-                row=row_number - 1,
-                rowOff=pixels_to_emu(row_offset),
+            marker = range_center_anchor_marker(
+                ws,
+                start_col,
+                end_col,
+                row_number,
+                target_width,
+                target_height,
+                row_height_px,
+                layout,
+                padding_px=padding,
             )
             image.anchor = OneCellAnchor(
                 _from=marker,
@@ -847,7 +1000,7 @@ def build_workbook(
     rules = configs["report_rules"]
     colors = layout["colors"]
     fonts = layout["fonts"]
-    heights = layout["rowHeights"]
+    heights = layout.get("rowHeightsPt", layout.get("rowHeights", {}))
     chinese_font = fonts["chineseExcelName"]
     latin_font = chinese_font
     thin = Side(style="thin", color="000000")
@@ -859,14 +1012,17 @@ def build_workbook(
     ws.title = layout["worksheetName"]
     ws.sheet_view.showGridLines = False
 
-    apply_column_widths(ws, layout)
+    column_widths = apply_column_widths(ws, layout, records)
+    layout["_computedPriceWrapThresholdChars"] = max(1, int(column_widths.get("G", 19.0) * 1.8))
 
     ws.row_dimensions[2].height = heights["topSpacer"]
+    style_range(ws, "B2:H2", chinese_font, fonts["defaultSize"], False, colors["white"], None, horizontal="centerContinuous")
     add_logo(ws, layout)
-    merge_and_style(ws, "B3:H3", format_title_date(start, end, layout["titleTemplate"]), chinese_font, fonts["titleSize"], False, colors["white"], None)
+    write_across_range(ws, "B3:H3", format_title_date(start, end, layout["titleTemplate"]), chinese_font, fonts["titleSize"], False, colors["white"], None)
     ws.row_dimensions[3].height = heights["title"]
-    merge_and_style(ws, "B5:H5", layout["introText"], chinese_font, fonts["introSize"], False, colors["white"], None)
-    ws["B5"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    style_range(ws, "B5:H5", chinese_font, fonts["introSize"], False, colors["white"], None, horizontal="left", wrap_text=False)
+    ws["B5"] = layout["introText"]
+    ws["B5"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=False)
     ws.row_dimensions[5].height = heights["intro"]
 
     header_row = layout["summary"]["headerRow"]
@@ -912,31 +1068,36 @@ def build_workbook(
             for col in ("D", "E", "F", "G", "H"):
                 wrap = no_wrap_by_col.get(col) not in no_wrap_columns
                 apply_base_style(ws[f"{col}{row}"], chinese_font, border=border, wrap_text=wrap)
-            ws.row_dimensions[row].height = row_height_for_line_count(2 if "\n" in str(ws[f"G{row}"].value) else 1, layout)
+            price_display = price_with_slash_wrap(record.price, layout["_computedPriceWrapThresholdChars"])
+            ws.row_dimensions[row].height = estimate_auto_row_height(
+                [
+                    (record.category, column_widths.get("D", 7.0), False),
+                    (record.product_name, column_widths.get("E", 13.0), False),
+                    (ws[f"F{row}"].value or "", column_widths.get("F", 9.0), False),
+                    (price_display, column_widths.get("G", 19.0), True),
+                    (record.remark, column_widths.get("H", 12.0), True),
+                ],
+                layout,
+                extra_padding=float(layout.get("autoFit", {}).get("summaryExtraPaddingPt", 0.0)),
+            )
             row += 1
 
     note_row = row
-    merge_and_style(
-        ws,
-        f"B{note_row}:H{note_row}",
-        layout["trackedBrandsPrefix"] + "、".join(brands),
-        chinese_font,
-        fonts.get("trackedBrandsSize", 9),
-        False,
-        colors["white"],
-        None,
+    note_text = layout["trackedBrandsPrefix"] + "、".join(brands)
+    note_font_size = fonts.get("trackedBrandsSize", 8)
+    style_range(ws, f"B{note_row}:H{note_row}", chinese_font, note_font_size, False, colors["white"], None, horizontal="left", wrap_text=False)
+    ws[f"B{note_row}"] = note_text
+    ws[f"B{note_row}"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=False)
+    ws.row_dimensions[note_row].height = max(
+        float(heights.get("trackedBrands", layout.get("autoFit", {}).get("minTextRowHeightPt", 16.8))),
+        row_height_for_line_count(1, layout),
     )
-    for col in range(column_index_from_string("B"), column_index_from_string("H") + 1):
-        cell = ws.cell(note_row, col)
-        cell.font = Font(name=chinese_font, size=fonts.get("trackedBrandsSize", 9), color="000000")
-    ws[f"B{note_row}"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-    ws.row_dimensions[note_row].height = row_height_for_line_count(1, layout)
 
     detail_row = note_row + layout["details"]["blankRowsAfterSummary"] + 1
     image_cache = output_path.parent / "_image_cache"
     for brand in displayed_brands:
         brand_records = grouped[brand]
-        merge_and_style(
+        write_across_range(
             ws,
             f"B{detail_row}:H{detail_row}",
             layout["details"]["brandHeaderTemplate"].format(brand=brand, count=len(brand_records)),
@@ -969,30 +1130,26 @@ def build_workbook(
                     wrap_text=layout["details"].get("labelWrapText", False),
                 )
                 value_range = f"C{detail_row}:H{detail_row}"
-                ws.merge_cells(value_range)
                 value_cell = ws[f"C{detail_row}"]
-                if key == "price":
-                    set_cell_price(value_cell, record.price, configs, wrap_after_slash=False)
-                else:
-                    value_cell.value = row_values.get(key, "")
-                apply_base_style(value_cell, chinese_font, bold=key == "productName", fill=colors["detailLabelFill"] if key == "productName" else None, border=border)
-                if key == "sellingPoint":
-                    horizontal = "left"
-                elif key == "ingredients":
-                    horizontal = layout["details"].get("ingredientsAlignment", "center")
-                else:
-                    horizontal = "center"
+                horizontal = "centerContinuous"
+                style_range(
+                    ws,
+                    value_range,
+                    chinese_font,
+                    fonts["defaultSize"],
+                    key == "productName",
+                    colors["detailLabelFill"] if key == "productName" else None,
+                    border,
+                    horizontal=horizontal,
+                    wrap_text=True,
+                    outer_border_only=True,
+                )
+                value_cell.value = format_price_for_output(record.price, configs, wrap_after_slash=False) if key == "price" else row_values.get(key, "")
                 value_cell.alignment = Alignment(horizontal=horizontal, vertical="center", wrap_text=True)
-                for merged_row in ws[value_range]:
-                    for cell in merged_row:
-                        cell.font = Font(name=chinese_font, size=fonts["defaultSize"], bold=key == "productName", color="000000")
-                        cell.alignment = Alignment(horizontal=horizontal, vertical="center", wrap_text=True)
-                        cell.border = border
-                        if key == "productName":
-                            cell.fill = PatternFill("solid", fgColor=colors["detailLabelFill"])
 
                 if key == "appearanceImages":
-                    ws.row_dimensions[detail_row].height = layout["image"].get("rowHeightPt", 120.0)
+                    image_height = cm_to_points(float(layout["image"].get("heightCm", 4.0))) + float(heights.get("imagePadding", 10.0))
+                    ws.row_dimensions[detail_row].height = max(float(layout["image"].get("rowHeightPt", 0.0)), image_height)
                     if record.image_urls:
                         image_path = download_image(record.image_urls[0], record.record_id, image_cache)
                         if image_path:
@@ -1004,22 +1161,27 @@ def build_workbook(
                             )
                 elif key == "sellingPoint":
                     text = str(row_values.get(key, ""))
-                    ws.row_dimensions[detail_row].height = estimate_row_height(
-                        text,
-                        heights.get("detailSellingPointChars", 75),
+                    value_width = sum(column_widths.get(get_column_letter(idx), 8.43) for idx in range(column_index_from_string("C"), column_index_from_string("H") + 1))
+                    ws.row_dimensions[detail_row].height = estimate_auto_row_height(
+                        [(text, value_width, True)],
                         layout,
-                        heights["detailTextMax"],
+                        max_height=float(layout.get("autoFit", {}).get("maxTextRowHeightPt", 120.0)),
+                        extra_padding=float(layout.get("autoFit", {}).get("detailExtraPaddingPt", 0.0)),
                     )
                 elif key == "ingredients":
                     text = str(row_values.get(key, ""))
-                    ws.row_dimensions[detail_row].height = estimate_row_height(
-                        text,
-                        120,
+                    value_width = sum(column_widths.get(get_column_letter(idx), 8.43) for idx in range(column_index_from_string("C"), column_index_from_string("H") + 1))
+                    ws.row_dimensions[detail_row].height = estimate_auto_row_height(
+                        [(text, value_width, True)],
                         layout,
-                        heights["detailTextMax"],
+                        max_height=float(layout.get("autoFit", {}).get("maxTextRowHeightPt", 120.0)),
                     )
                 else:
-                    ws.row_dimensions[detail_row].height = row_height_for_line_count(1, layout)
+                    value_width = sum(column_widths.get(get_column_letter(idx), 8.43) for idx in range(column_index_from_string("C"), column_index_from_string("H") + 1))
+                    ws.row_dimensions[detail_row].height = estimate_auto_row_height(
+                        [(str(row_values.get(key, "")), value_width, key == "price")],
+                        layout,
+                    )
                 detail_row += 1
 
     apply_page_fill_and_fonts(ws, layout, max(detail_row, ws.max_row))
