@@ -85,7 +85,7 @@ cp config/dingtalk.example.json config/dingtalk.json
     "projectPath": "assets/fonts/方正FW筑紫黑简 R.ttf"
   }
 }
-
+```
 也可以把字体文件放到 `assets/fonts/`，再把 `projectPath` 改成实际文件名。字体是内部独家字体，不提交、不上传外部。Excel 文件只记录字体名称，不会嵌入字体文件，打开 Excel 的电脑也需要安装对应字体。现阶段生成脚本统一使用中文字体，避免英文字体在 Excel 中不生效时回退到宋体。
 
 ## CLI 命令
