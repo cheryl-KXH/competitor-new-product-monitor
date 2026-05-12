@@ -49,6 +49,20 @@
     "parenthesizedPricePattern": "\\d+(?:\\.\\d+)?\\s*元",
     "summaryWrapAfterSlash": true
   },
+  "dataQualityRule": {
+    "enabled": true,
+    "continueOnWarning": true,
+    "warnMissingImages": true,
+    "requiredTextFields": {
+      "category": "品类",
+      "productName": "新品名称",
+      "launchDate": "上市日期",
+      "price": "产品价格",
+      "series": "产品系列归属",
+      "sellingPoint": "产品卖点介绍",
+      "ingredients": "原料构成"
+    }
+  },
   "sort": {
     "brandOrder": "defaultBrands",
     "withinBrand": ["launchDate", "productName"]

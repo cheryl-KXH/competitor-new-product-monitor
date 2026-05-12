@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -52,6 +53,21 @@ class ReportRecord:
     ingredients: str
     image_urls: list[str]
     remark: str
+
+
+@dataclass
+class DataQualityReport:
+    missing_fields: list[str]
+    missing_images: list[str]
+    image_download_failures: list[str]
+
+    @property
+    def missing_field_count(self) -> int:
+        return len(self.missing_fields)
+
+    @property
+    def image_issue_count(self) -> int:
+        return len(self.missing_images) + len(self.image_download_failures)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -669,6 +685,85 @@ def describe_report_record(record: ReportRecord) -> str:
     return f"{record.brand} / {record.product_name} / {launch_date} / {clean_price_text(record.price)} ({record_id})"
 
 
+def quality_record_label(record: ReportRecord) -> str:
+    launch_date = record.launch_date.isoformat() if record.launch_date else "无日期"
+    record_id = record.record_id or "无recordId"
+    product_name = record.product_name or "未命名新品"
+    return f"{record.brand} / {product_name} / {launch_date} / {record_id}"
+
+
+def is_missing_text(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, date):
+        return False
+    return not clean_text(str(value))
+
+
+def collect_data_quality_report(records: list[ReportRecord], rules: dict[str, Any]) -> DataQualityReport:
+    quality_rule = rules.get("dataQualityRule", {})
+    if not quality_rule.get("enabled", True):
+        return DataQualityReport([], [], [])
+
+    default_fields = {
+        "category": "品类",
+        "productName": "新品名称",
+        "launchDate": "上市日期",
+        "price": "产品价格",
+        "series": "产品系列归属",
+        "sellingPoint": "产品卖点介绍",
+        "ingredients": "原料构成",
+    }
+    configured_fields = quality_rule.get("requiredTextFields") or default_fields
+    missing_fields: list[str] = []
+    for record in records:
+        values = {
+            "category": record.category,
+            "productName": record.product_name,
+            "launchDate": record.launch_date,
+            "price": clean_price_text(record.price),
+            "series": record.series,
+            "sellingPoint": record.selling_point,
+            "ingredients": record.ingredients,
+        }
+        for field_key, label in configured_fields.items():
+            if is_missing_text(values.get(field_key)):
+                missing_fields.append(f"{quality_record_label(record)}：缺少{label}")
+
+    missing_images: list[str] = []
+    if quality_rule.get("warnMissingImages", True):
+        for record in records:
+            if not record.image_urls:
+                missing_images.append(f"{quality_record_label(record)}：缺少产品外观图片")
+
+    return DataQualityReport(missing_fields, missing_images, [])
+
+
+def print_limited_warning(title: str, items: list[str], limit: int = 20) -> None:
+    if not items:
+        return
+    print(title, file=sys.stderr)
+    for item in items[:limit]:
+        print(f"  - {item}", file=sys.stderr)
+    if len(items) > limit:
+        print(f"  - 还有 {len(items) - limit} 条未列出", file=sys.stderr)
+
+
+def print_data_quality_warnings(report: DataQualityReport) -> None:
+    print_limited_warning(
+        f"WARNING: 发现 {len(report.missing_fields)} 处底表字段缺失，请检查钉钉 AI 表：",
+        report.missing_fields,
+    )
+    print_limited_warning(
+        f"WARNING: 发现 {len(report.missing_images)} 条产品外观图片缺失，请检查钉钉 AI 表：",
+        report.missing_images,
+    )
+    print_limited_warning(
+        f"WARNING: 发现 {len(report.image_download_failures)} 条产品外观图片下载失败，请检查钉钉 AI 表图片附件：",
+        report.image_download_failures,
+    )
+
+
 def print_duplicate_warning(label: str, items: list[str]) -> None:
     print(f"WARNING: 已跳过 {len(items)} 条{label}：", file=sys.stderr)
     for item in items[:10]:
@@ -995,6 +1090,7 @@ def build_workbook(
     end: date,
     brands: list[str],
     output_path: Path,
+    data_quality_report: DataQualityReport,
 ) -> None:
     layout = configs["excel_layout"]
     rules = configs["report_rules"]
@@ -1019,7 +1115,7 @@ def build_workbook(
     style_range(ws, "B2:H2", chinese_font, fonts["defaultSize"], False, colors["white"], None, horizontal="centerContinuous")
     add_logo(ws, layout)
     write_across_range(ws, "B3:H3", format_title_date(start, end, layout["titleTemplate"]), chinese_font, fonts["titleSize"], False, colors["white"], None)
-    ws.row_dimensions[3].height = heights["title"]
+    ws.row_dimensions[3].height = 24
     style_range(ws, "B5:H5", chinese_font, fonts["introSize"], False, colors["white"], None, horizontal="left", wrap_text=False)
     ws["B5"] = layout["introText"]
     ws["B5"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=False)
@@ -1094,104 +1190,116 @@ def build_workbook(
     )
 
     detail_row = note_row + layout["details"]["blankRowsAfterSummary"] + 1
-    image_cache = output_path.parent / "_image_cache"
-    for brand in displayed_brands:
-        brand_records = grouped[brand]
-        write_across_range(
-            ws,
-            f"B{detail_row}:H{detail_row}",
-            layout["details"]["brandHeaderTemplate"].format(brand=brand, count=len(brand_records)),
-            chinese_font,
-            fonts["defaultSize"],
-            True,
-            colors["detailHeaderFill"],
-            border,
-        )
-        ws.row_dimensions[detail_row].height = heights["detailHeader"]
-        detail_row += 1
+    image_cache_manager = tempfile.TemporaryDirectory(prefix="weekly_report_images_")
+    image_cache = Path(image_cache_manager.name)
+    try:
+        for brand in displayed_brands:
+            brand_records = grouped[brand]
+            write_across_range(
+                ws,
+                f"B{detail_row}:H{detail_row}",
+                layout["details"]["brandHeaderTemplate"].format(brand=brand, count=len(brand_records)),
+                chinese_font,
+                fonts["defaultSize"],
+                True,
+                colors["detailHeaderFill"],
+                border,
+            )
+            ws.row_dimensions[detail_row].height = heights["detailHeader"]
+            detail_row += 1
 
-        for record in brand_records:
-            row_values = {
-                "productName": record.product_name,
-                "series": record.series,
-                "sellingPoint": record.selling_point,
-                "price": record.price,
-                "ingredients": record.ingredients,
-                "appearanceImages": "",
-            }
-            for key, label in layout["details"]["rowsPerProduct"]:
-                ws[f"B{detail_row}"] = label
-                apply_base_style(
-                    ws[f"B{detail_row}"],
-                    chinese_font,
-                    bold=True,
-                    fill=colors["detailLabelFill"],
-                    border=border,
-                    wrap_text=layout["details"].get("labelWrapText", False),
-                )
-                value_range = f"C{detail_row}:H{detail_row}"
-                value_cell = ws[f"C{detail_row}"]
-                horizontal = "centerContinuous"
-                style_range(
-                    ws,
-                    value_range,
-                    chinese_font,
-                    fonts["defaultSize"],
-                    key == "productName",
-                    colors["detailLabelFill"] if key == "productName" else None,
-                    border,
-                    horizontal=horizontal,
-                    wrap_text=True,
-                    outer_border_only=True,
-                )
-                value_cell.value = format_price_for_output(record.price, configs, wrap_after_slash=False) if key == "price" else row_values.get(key, "")
-                value_cell.alignment = Alignment(horizontal=horizontal, vertical="center", wrap_text=True)
+            for record in brand_records:
+                row_values = {
+                    "productName": record.product_name,
+                    "series": record.series,
+                    "sellingPoint": record.selling_point,
+                    "price": record.price,
+                    "ingredients": record.ingredients,
+                    "appearanceImages": "",
+                }
+                for key, label in layout["details"]["rowsPerProduct"]:
+                    ws[f"B{detail_row}"] = label
+                    apply_base_style(
+                        ws[f"B{detail_row}"],
+                        chinese_font,
+                        bold=True,
+                        fill=colors["detailLabelFill"],
+                        border=border,
+                        wrap_text=layout["details"].get("labelWrapText", False),
+                    )
+                    value_range = f"C{detail_row}:H{detail_row}"
+                    value_cell = ws[f"C{detail_row}"]
+                    horizontal = "centerContinuous"
+                    style_range(
+                        ws,
+                        value_range,
+                        chinese_font,
+                        fonts["defaultSize"],
+                        key == "productName",
+                        colors["detailLabelFill"] if key == "productName" else None,
+                        border,
+                        horizontal=horizontal,
+                        wrap_text=True,
+                        outer_border_only=True,
+                    )
+                    value_cell.value = format_price_for_output(record.price, configs, wrap_after_slash=False) if key == "price" else row_values.get(key, "")
+                    value_cell.alignment = Alignment(horizontal=horizontal, vertical="center", wrap_text=True)
 
-                if key == "appearanceImages":
-                    image_height = cm_to_points(float(layout["image"].get("heightCm", 4.0))) + float(heights.get("imagePadding", 10.0))
-                    ws.row_dimensions[detail_row].height = max(float(layout["image"].get("rowHeightPt", 0.0)), image_height)
-                    if record.image_urls:
-                        image_path = download_image(record.image_urls[0], record.record_id, image_cache)
-                        if image_path:
-                            add_image(
-                                ws,
-                                image_path,
-                                detail_row,
-                                layout,
-                            )
-                elif key == "sellingPoint":
-                    text = str(row_values.get(key, ""))
-                    value_width = sum(column_widths.get(get_column_letter(idx), 8.43) for idx in range(column_index_from_string("C"), column_index_from_string("H") + 1))
-                    ws.row_dimensions[detail_row].height = estimate_auto_row_height(
-                        [(text, value_width, True)],
-                        layout,
-                        max_height=float(layout.get("autoFit", {}).get("maxTextRowHeightPt", 120.0)),
-                        extra_padding=float(layout.get("autoFit", {}).get("detailExtraPaddingPt", 0.0)),
-                    )
-                elif key == "ingredients":
-                    text = str(row_values.get(key, ""))
-                    value_width = sum(column_widths.get(get_column_letter(idx), 8.43) for idx in range(column_index_from_string("C"), column_index_from_string("H") + 1))
-                    ws.row_dimensions[detail_row].height = estimate_auto_row_height(
-                        [(text, value_width, True)],
-                        layout,
-                        max_height=float(layout.get("autoFit", {}).get("maxTextRowHeightPt", 120.0)),
-                    )
-                else:
-                    value_width = sum(column_widths.get(get_column_letter(idx), 8.43) for idx in range(column_index_from_string("C"), column_index_from_string("H") + 1))
-                    ws.row_dimensions[detail_row].height = estimate_auto_row_height(
-                        [(str(row_values.get(key, "")), value_width, key == "price")],
-                        layout,
-                    )
-                detail_row += 1
+                    if key == "appearanceImages":
+                        image_height = cm_to_points(float(layout["image"].get("heightCm", 4.0))) + float(heights.get("imagePadding", 10.0))
+                        ws.row_dimensions[detail_row].height = max(float(layout["image"].get("rowHeightPt", 0.0)), image_height)
+                        if record.image_urls:
+                            image_path = download_image(record.image_urls[0], record.record_id, image_cache)
+                            if image_path:
+                                add_image(
+                                    ws,
+                                    image_path,
+                                    detail_row,
+                                    layout,
+                                )
+                            else:
+                                data_quality_report.image_download_failures.append(f"{quality_record_label(record)}：产品外观图片下载失败")
+                    elif key == "sellingPoint":
+                        text = str(row_values.get(key, ""))
+                        value_width = sum(column_widths.get(get_column_letter(idx), 8.43) for idx in range(column_index_from_string("C"), column_index_from_string("H") + 1))
+                        ws.row_dimensions[detail_row].height = estimate_auto_row_height(
+                            [(text, value_width, True)],
+                            layout,
+                            max_height=float(layout.get("autoFit", {}).get("maxTextRowHeightPt", 120.0)),
+                            extra_padding=float(layout.get("autoFit", {}).get("detailExtraPaddingPt", 0.0)),
+                        )
+                    elif key == "ingredients":
+                        text = str(row_values.get(key, ""))
+                        value_width = sum(column_widths.get(get_column_letter(idx), 8.43) for idx in range(column_index_from_string("C"), column_index_from_string("H") + 1))
+                        ws.row_dimensions[detail_row].height = estimate_auto_row_height(
+                            [(text, value_width, True)],
+                            layout,
+                            max_height=float(layout.get("autoFit", {}).get("maxTextRowHeightPt", 120.0)),
+                        )
+                    else:
+                        value_width = sum(column_widths.get(get_column_letter(idx), 8.43) for idx in range(column_index_from_string("C"), column_index_from_string("H") + 1))
+                        ws.row_dimensions[detail_row].height = estimate_auto_row_height(
+                            [(str(row_values.get(key, "")), value_width, key == "price")],
+                            layout,
+                        )
+                    detail_row += 1
 
-    apply_page_fill_and_fonts(ws, layout, max(detail_row, ws.max_row))
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(output_path)
+        apply_page_fill_and_fonts(ws, layout, max(detail_row, ws.max_row))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        wb.save(output_path)
+    finally:
+        image_cache_manager.cleanup()
 
 
 def default_output_path(start: date, end: date, layout: dict[str, Any]) -> Path:
     output_dir = ROOT / layout.get("outputDirectory", "outputs")
     return output_dir / f"竞品新品周报{start.isoformat()}_{end.isoformat()}.xlsx"
+
+
+def cleanup_legacy_image_cache(output_dir: Path) -> None:
+    legacy_cache = output_dir / "_image_cache"
+    if legacy_cache.exists() and legacy_cache.is_dir():
+        shutil.rmtree(legacy_cache)
 
 
 def main() -> int:
@@ -1222,12 +1330,16 @@ def main() -> int:
     field_ids = resolve_field_ids(configs["field_mapping"], table_fields)
     raw_records = query_records(configs, field_ids, start, end)
     records = normalize_records(raw_records, configs, field_ids, brands)
+    data_quality_report = collect_data_quality_report(records, configs["report_rules"])
     output_path = Path(args.output) if args.output else default_output_path(start, end, configs["excel_layout"])
     if not output_path.is_absolute():
         output_path = ROOT / output_path
-    build_workbook(records, configs, start, end, brands, output_path)
+    build_workbook(records, configs, start, end, brands, output_path, data_quality_report)
+    cleanup_legacy_image_cache(output_path.parent)
+    print_data_quality_warnings(data_quality_report)
     print(f"已生成：{output_path}")
     print(f"记录数：{len(records)}")
+    print(f"数据提醒：缺失字段 {data_quality_report.missing_field_count} 处，缺图 {data_quality_report.image_issue_count} 条。")
     return 0
 
 
