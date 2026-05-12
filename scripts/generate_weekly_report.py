@@ -373,6 +373,20 @@ def clean_text(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def normalize_paragraph_text(text: str) -> str:
+    parts = [line.strip() for line in str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    parts = [part for part in parts if part]
+    if not parts:
+        return ""
+    end_punctuation = set("，。；：！？、,.!?;:")
+    normalized: list[str] = []
+    for index, part in enumerate(parts):
+        if index < len(parts) - 1 and part[-1] not in end_punctuation:
+            part += "。"
+        normalized.append(part)
+    return "".join(normalized)
+
+
 def normalize_records(
     raw_records: list[dict[str, Any]],
     configs: dict[str, dict[str, Any]],
@@ -409,8 +423,8 @@ def normalize_records(
             price=str(values.get("price") or ""),
             category=category,
             series=str(values.get("series") or ""),
-            selling_point=str(values.get("sellingPoint") or ""),
-            ingredients=str(values.get("ingredients") or ""),
+            selling_point=normalize_paragraph_text(str(values.get("sellingPoint") or "")),
+            ingredients=normalize_paragraph_text(str(values.get("ingredients") or "")),
             image_urls=values.get("appearanceImages") or [],
             remark=remark,
         )
@@ -598,11 +612,11 @@ def visual_len(text: str) -> int:
     return sum(2 if ord(ch) > 127 else 1 for ch in str(text))
 
 
-def estimate_line_count(text: str, col_chars: float) -> int:
+def estimate_line_count(text: str, col_chars: float, chars_per_line_factor: float = 1.8) -> int:
     if not text:
         return 1
     lines = 0
-    effective_chars = max(col_chars * 1.8, 1)
+    effective_chars = max(col_chars * chars_per_line_factor, 1)
     for part in str(text).split("\n"):
         length = visual_len(part)
         lines += max(1, math.ceil(length / effective_chars))
@@ -637,6 +651,82 @@ def estimate_auto_row_height(
     if min_height is None:
         min_height = float(auto_fit.get("minTextRowHeightPt", 16.8))
     return max(min_height, height)
+
+
+def column_width_sum(column_widths: dict[str, float], start_col: str, end_col: str) -> float:
+    return sum(
+        column_widths.get(get_column_letter(idx), 8.43)
+        for idx in range(column_index_from_string(start_col), column_index_from_string(end_col) + 1)
+    )
+
+
+def row_height_for_text(
+    text: str,
+    width_chars: float,
+    layout: dict[str, Any],
+    chars_per_line_factor: float,
+    padding_pt: float = 0.0,
+    max_height: float | None = None,
+) -> float:
+    line_count = estimate_line_count(text, width_chars, chars_per_line_factor)
+    padding = padding_pt if line_count > 1 else 0.0
+    return estimate_height_for_line_count(line_count, layout, padding, max_height)
+
+
+def estimate_height_for_line_count(
+    line_count: int,
+    layout: dict[str, Any],
+    padding_pt: float = 0.0,
+    max_height: float | None = None,
+) -> float:
+    auto_fit = layout.get("autoFit", {})
+    min_height = float(auto_fit.get("minTextRowHeightPt", 16.8))
+    if max_height is None:
+        max_height = float(auto_fit.get("maxTextRowHeightPt", 120.0))
+    return max(min_height, row_height_for_line_count(line_count, layout, max_height) + padding_pt)
+
+
+def estimate_summary_row_height(
+    record: ReportRecord,
+    price_display: str,
+    column_widths: dict[str, float],
+    layout: dict[str, Any],
+) -> float:
+    auto_fit = layout.get("autoFit", {})
+    factor = float(auto_fit.get("summaryCharsPerLineFactor", 1.45))
+    padding = float(auto_fit.get("summaryVerticalPaddingPt", 3.0))
+    wrap_columns = set(auto_fit.get("summaryWrapColumns", ["G", "H"]))
+    line_counts = [1]
+    if "G" in wrap_columns:
+        line_counts.append(estimate_line_count(price_display, column_widths.get("G", 19.0), factor))
+    if "H" in wrap_columns:
+        line_counts.append(estimate_line_count(record.remark, column_widths.get("H", 12.0), factor))
+    max_lines = max(line_counts)
+    return estimate_height_for_line_count(max_lines, layout, padding if max_lines > 1 else 0.0)
+
+
+def estimate_detail_row_height(key: str, text: str, value_width: float, layout: dict[str, Any]) -> float:
+    auto_fit = layout.get("autoFit", {})
+    max_height = float(auto_fit.get("maxTextRowHeightPt", 120.0))
+    if key == "sellingPoint":
+        return row_height_for_text(
+            text,
+            value_width,
+            layout,
+            float(auto_fit.get("detailLongTextCharsPerLineFactor", 1.5)),
+            float(auto_fit.get("detailLongTextPaddingPt", 4.0)),
+            max_height=max_height,
+        )
+    if key == "ingredients":
+        return row_height_for_text(
+            text,
+            value_width,
+            layout,
+            float(auto_fit.get("detailShortTextCharsPerLineFactor", 1.55)),
+            float(auto_fit.get("detailShortTextPaddingPt", 2.0)),
+            max_height=max_height,
+        )
+    return estimate_height_for_line_count(1, layout)
 
 
 def clean_price_text(text: str) -> str:
@@ -1165,29 +1255,18 @@ def build_workbook(
                 wrap = no_wrap_by_col.get(col) not in no_wrap_columns
                 apply_base_style(ws[f"{col}{row}"], chinese_font, border=border, wrap_text=wrap)
             price_display = price_with_slash_wrap(record.price, layout["_computedPriceWrapThresholdChars"])
-            ws.row_dimensions[row].height = estimate_auto_row_height(
-                [
-                    (record.category, column_widths.get("D", 7.0), False),
-                    (record.product_name, column_widths.get("E", 13.0), False),
-                    (ws[f"F{row}"].value or "", column_widths.get("F", 9.0), False),
-                    (price_display, column_widths.get("G", 19.0), True),
-                    (record.remark, column_widths.get("H", 12.0), True),
-                ],
-                layout,
-                extra_padding=float(layout.get("autoFit", {}).get("summaryExtraPaddingPt", 0.0)),
-            )
+            ws.row_dimensions[row].height = estimate_summary_row_height(record, price_display, column_widths, layout)
             row += 1
 
     note_row = row
     note_text = layout["trackedBrandsPrefix"] + "、".join(brands)
     note_font_size = fonts.get("trackedBrandsSize", 8)
-    style_range(ws, f"B{note_row}:H{note_row}", chinese_font, note_font_size, False, colors["white"], None, horizontal="left", wrap_text=False)
+    note_range = f"B{note_row}:H{note_row}"
+    style_range(ws, note_range, chinese_font, note_font_size, False, colors["white"], None, horizontal="left", wrap_text=False)
+    ws.merge_cells(note_range)
     ws[f"B{note_row}"] = note_text
     ws[f"B{note_row}"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=False)
-    ws.row_dimensions[note_row].height = max(
-        float(heights.get("trackedBrands", layout.get("autoFit", {}).get("minTextRowHeightPt", 16.8))),
-        row_height_for_line_count(1, layout),
-    )
+    ws.row_dimensions[note_row].height = float(heights.get("trackedBrands", 16.8))
 
     detail_row = note_row + layout["details"]["blankRowsAfterSummary"] + 1
     image_cache_manager = tempfile.TemporaryDirectory(prefix="weekly_report_images_")
@@ -1259,29 +1338,10 @@ def build_workbook(
                                 )
                             else:
                                 data_quality_report.image_download_failures.append(f"{quality_record_label(record)}：产品外观图片下载失败")
-                    elif key == "sellingPoint":
-                        text = str(row_values.get(key, ""))
-                        value_width = sum(column_widths.get(get_column_letter(idx), 8.43) for idx in range(column_index_from_string("C"), column_index_from_string("H") + 1))
-                        ws.row_dimensions[detail_row].height = estimate_auto_row_height(
-                            [(text, value_width, True)],
-                            layout,
-                            max_height=float(layout.get("autoFit", {}).get("maxTextRowHeightPt", 120.0)),
-                            extra_padding=float(layout.get("autoFit", {}).get("detailExtraPaddingPt", 0.0)),
-                        )
-                    elif key == "ingredients":
-                        text = str(row_values.get(key, ""))
-                        value_width = sum(column_widths.get(get_column_letter(idx), 8.43) for idx in range(column_index_from_string("C"), column_index_from_string("H") + 1))
-                        ws.row_dimensions[detail_row].height = estimate_auto_row_height(
-                            [(text, value_width, True)],
-                            layout,
-                            max_height=float(layout.get("autoFit", {}).get("maxTextRowHeightPt", 120.0)),
-                        )
                     else:
-                        value_width = sum(column_widths.get(get_column_letter(idx), 8.43) for idx in range(column_index_from_string("C"), column_index_from_string("H") + 1))
-                        ws.row_dimensions[detail_row].height = estimate_auto_row_height(
-                            [(str(row_values.get(key, "")), value_width, key == "price")],
-                            layout,
-                        )
+                        text = clean_price_text(record.price) if key == "price" else str(row_values.get(key, ""))
+                        value_width = column_width_sum(column_widths, "C", "H")
+                        ws.row_dimensions[detail_row].height = estimate_detail_row_height(key, text, value_width, layout)
                     detail_row += 1
 
         apply_page_fill_and_fonts(ws, layout, max(detail_row, ws.max_row))
@@ -1294,6 +1354,27 @@ def build_workbook(
 def default_output_path(start: date, end: date, layout: dict[str, Any]) -> Path:
     output_dir = ROOT / layout.get("outputDirectory", "outputs")
     return output_dir / f"竞品新品周报{start.isoformat()}_{end.isoformat()}.xlsx"
+
+
+def resolve_non_overwriting_output_path(path: Path) -> Path:
+    suffix = path.suffix
+    stem = path.stem
+    parent = path.parent
+    if not parent.exists():
+        return path
+    escaped_stem = re.escape(stem)
+    escaped_suffix = re.escape(suffix)
+    pattern = re.compile(rf"^{escaped_stem}(?:_(\d+))?{escaped_suffix}$")
+    max_suffix = 0
+    for existing in parent.glob(f"{stem}*{suffix}"):
+        match = pattern.match(existing.name)
+        if not match:
+            continue
+        number = int(match.group(1)) if match.group(1) else 1
+        max_suffix = max(max_suffix, number)
+    if max_suffix == 0:
+        return path
+    return parent / f"{stem}_{max_suffix + 1}{suffix}"
 
 
 def cleanup_legacy_image_cache(output_dir: Path) -> None:
@@ -1334,12 +1415,14 @@ def main() -> int:
     output_path = Path(args.output) if args.output else default_output_path(start, end, configs["excel_layout"])
     if not output_path.is_absolute():
         output_path = ROOT / output_path
+    output_path = resolve_non_overwriting_output_path(output_path)
     build_workbook(records, configs, start, end, brands, output_path, data_quality_report)
     cleanup_legacy_image_cache(output_path.parent)
     print_data_quality_warnings(data_quality_report)
     print(f"已生成：{output_path}")
     print(f"记录数：{len(records)}")
     print(f"数据提醒：缺失字段 {data_quality_report.missing_field_count} 处，缺图 {data_quality_report.image_issue_count} 条。")
+    print(f"本次生成文件：{output_path.name}")
     return 0
 
 

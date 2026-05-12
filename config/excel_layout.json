@@ -121,8 +121,13 @@
     "additionalLineHeightPt": 15.0,
     "minTextRowHeightPt": 16.8,
     "maxTextRowHeightPt": 120.0,
-    "summaryExtraPaddingPt": 0.0,
-    "detailExtraPaddingPt": 0.0,
+    "summaryWrapColumns": ["G", "H"],
+    "summaryCharsPerLineFactor": 1.45,
+    "detailLongTextCharsPerLineFactor": 1.5,
+    "detailShortTextCharsPerLineFactor": 1.55,
+    "summaryVerticalPaddingPt": 3.0,
+    "detailLongTextPaddingPt": 4.0,
+    "detailShortTextPaddingPt": 2.0,
     "columnWidthPixelScale": 7.0,
     "columnWidthPixelPadding": 5.0
   },
@@ -149,7 +154,7 @@
     "列宽规则：B/C/D/F 固定，E 根据产品名自动适配，G 根据价格 / 分隔块自动适配，H 自动补足剩余宽度。",
     "汇总表价格列只要出现 / 就在 / 后插入单个换行，且 / 前后价格块不被切开。",
     "A:I 无业务底纹区域统一填充白色，并应用配置字体，避免回退到宋体。",
-    "普通文本行高按内容估算到尽量显示完整内容；产品外观行高至少满足 4cm 图片和内边距。",
-    "横向范围不使用合并单元格，改用跨列居中；只保留汇总表品牌列和新品数量列的纵向合并。"
+    "行高重点适配关注品牌说明、汇总表 G/H、产品卖点介绍和超长原料构成；短文本明细行保持紧凑。",
+    "关注品牌说明行使用 B:H 合并单元格；其他横向范围使用跨列居中，只保留汇总表品牌列和新品数量列的纵向合并。"
   ]
 }
