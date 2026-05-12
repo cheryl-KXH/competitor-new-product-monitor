@@ -1301,7 +1301,7 @@ def build_workbook(
                     apply_base_style(
                         ws[f"B{detail_row}"],
                         chinese_font,
-                        bold=True,
+                        bold=key == "productName",
                         fill=colors["detailLabelFill"],
                         border=border,
                         wrap_text=layout["details"].get("labelWrapText", False),
@@ -1315,7 +1315,7 @@ def build_workbook(
                         chinese_font,
                         fonts["defaultSize"],
                         key == "productName",
-                        colors["detailLabelFill"] if key == "productName" else None,
+                        colors["detailLabelFill"] if key in ("productName", "series") else None,
                         border,
                         horizontal=horizontal,
                         wrap_text=True,
