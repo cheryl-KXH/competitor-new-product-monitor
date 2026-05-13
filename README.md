@@ -15,13 +15,22 @@ competitor-new-product-monitor/
 │   ├── field_mapping.json
 │   ├── report_rules.json
 │   ├── excel_layout.json
+│   ├── image_layout.json
 │   └── font_files.json
 ├── assets/
-│   └── fonts/
+│   ├── fonts/
+│   │   └── README.md
+│   └── logo/
 │       └── README.md
 ├── scripts/
-│   └── generate_weekly_report.py
+│   ├── generate_weekly_report.py
+│   ├── generate_weekly_outputs.py
+│   └── render_report_image.py
 └── outputs/
+    └── 竞品新品周报YYYY-MM-DD_YYYY-MM-DD/
+        ├── 竞品新品周报YYYY-MM-DD_YYYY-MM-DD.xlsx
+        ├── 竞品新品周报YYYY-MM-DD_YYYY-MM-DD.html
+        └── 竞品新品周报YYYY-MM-DD_YYYY-MM-DD.png
 ```
 
 - `config/dingtalk.example.json`：可提交的钉钉连接配置模板，不含真实 token。
@@ -29,19 +38,30 @@ competitor-new-product-monitor/
 - `config/field_mapping.json`：钉钉字段如何翻译成脚本标准字段。
 - `config/report_rules.json`：这份周报的业务规则。
 - `config/excel_layout.json`：Excel 怎么排版、数据写到哪里。
+- `config/image_layout.json`：HTML 和 PNG 长图怎么排版、渲染。
 - `config/font_files.json`：内部中英文字体文件路径配置。
 - `assets/logo/`：周报顶部 logo 本地放置位置。logo 是内部专用资产，不提交、不上传外部。
 - `assets/fonts/`：字体文件本地放置位置。字体不要提交、不要上传外部。
-- `scripts/generate_weekly_report.py`：生成脚本。
+- `scripts/generate_weekly_report.py`：现有 Excel 生成脚本。
+- `scripts/generate_weekly_outputs.py`：统一输出入口，控制 `--output-mode`。
+- `scripts/render_report_image.py`：HTML/PNG 长图渲染模块。
 - `outputs/`：默认 Excel 输出目录。
 
 ## 环境准备
 
-脚本需要 Python 3、`openpyxl`、`Pillow` 和 `mcporter`。
+脚本需要 Python 3、`openpyxl`、`Pillow`、`playwright`、本机 Google Chrome 和 `mcporter`。
 
 ```bash
 pip install -r requirements.txt
 ```
+
+首次使用 PNG 长图输出前，建议安装 Playwright 运行环境：
+
+```bash
+python -m playwright install chromium
+```
+
+当前脚本默认会优先调用本机 `/Applications/Google Chrome.app` 做长图截图。
 
 安装依赖后，可以运行配置校验：
 
@@ -89,6 +109,36 @@ cp config/dingtalk.example.json config/dingtalk.json
 也可以把字体文件放到 `assets/fonts/`，再把 `projectPath` 改成实际文件名。字体是内部独家字体，不提交、不上传外部。Excel 文件只记录字体名称，不会嵌入字体文件，打开 Excel 的电脑也需要安装对应字体。现阶段生成脚本统一使用中文字体，避免英文字体在 Excel 中不生效时回退到宋体。
 
 ## CLI 命令
+
+推荐使用统一入口，默认输出 Excel、HTML 和 PNG 三种产物：
+
+```bash
+python scripts/generate_weekly_outputs.py
+```
+
+指定周期：
+
+```bash
+python scripts/generate_weekly_outputs.py --start-date 2026-05-09 --end-date 2026-05-15
+```
+
+指定输出模式：
+
+```bash
+python scripts/generate_weekly_outputs.py --output-mode excel
+python scripts/generate_weekly_outputs.py --output-mode html
+python scripts/generate_weekly_outputs.py --output-mode image
+python scripts/generate_weekly_outputs.py --output-mode all
+```
+
+说明：
+
+- 不写 `--output-mode` 时默认等同于 `--output-mode all`，生成 `.xlsx`、`.html`、`.png`。
+- `--output-mode image` 只保留 PNG，截图用的 HTML 临时文件不会写入输出目录。
+- 每次生成都会创建一个周报文件夹，例如 `outputs/竞品新品周报2026-05-09_2026-05-15/`。
+- 如果同名文件夹已存在，会生成 `_2`、`_3` 后缀的新文件夹。
+
+现有 Excel 单独生成脚本仍然保留：
 
 默认生成最近一个完整“周六到周五”周期：
 
