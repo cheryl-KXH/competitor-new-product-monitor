@@ -99,6 +99,31 @@ def html_text(value: Any) -> str:
     return escape_text(value).replace("\n", "<br>")
 
 
+def render_remark_html(value: str) -> str:
+    text = re.sub(r"([A-Za-z0-9]+)([\u4e00-\u9fff])", r"\1<wbr>\2", str(value or ""))
+    break_after_chars = set(" 、/-")
+    parts: list[str] = []
+    index = 0
+    while index < len(text):
+        if text.startswith("<wbr>", index):
+            parts.append("<wbr>")
+            index += len("<wbr>")
+            continue
+        char = text[index]
+        if char == "\r":
+            index += 1
+            continue
+        if char == "\n":
+            parts.append("<br>")
+            index += 1
+            continue
+        parts.append(html.escape(char, quote=True))
+        if char in break_after_chars:
+            parts.append("<wbr>")
+        index += 1
+    return "".join(parts)
+
+
 def render_price_html(value: str, wrap_after_slash: bool) -> str:
     text = clean_price_text(value)
     if wrap_after_slash and "/" in text:
@@ -143,6 +168,11 @@ def price_blocks(text: str) -> list[str]:
     return [part.strip() for part in value.split("/") if part.strip()] or [value]
 
 
+def longest_ascii_token(text: str) -> str:
+    tokens = re.findall(r"[A-Za-z0-9]+", str(text or ""))
+    return max(tokens, key=len, default="")
+
+
 def estimate_wrapped_lines(text: str, width_px: int, font_size_px: int, explicit_breaks: bool = False) -> int:
     if not text:
         return 1
@@ -181,7 +211,24 @@ def compute_summary_column_widths(records: list[ReportRecord], layout: dict[str,
 
     remark_width = remaining_after_name - price_width
     longest_remark = max((record.remark for record in records), key=visual_len, default="")
-    remark_need = text_width_px(longest_remark, font_size, int(padding.get("remark", 16)))
+    remark_padding = int(padding.get("remark", 16))
+    remark_need = text_width_px(longest_remark, font_size, remark_padding)
+    longest_remark_token = max((longest_ascii_token(record.remark) for record in records), key=len, default="")
+    token_need = text_width_px(longest_remark_token, font_size, remark_padding)
+    required_remark_width = clamp(token_need, int(remark_min), int(remark_max))
+    if remark_width < required_remark_width:
+        deficit = required_remark_width - remark_width
+        product_room = product_width - int(name_min)
+        take_from_product = min(deficit, max(0, product_room))
+        product_width -= take_from_product
+        remark_width += take_from_product
+        deficit -= take_from_product
+        emergency_product_floor = max(1, int(name_min) - 12)
+        emergency_product_room = product_width - emergency_product_floor
+        take_from_product = min(deficit, max(0, emergency_product_room))
+        product_width -= take_from_product
+        remark_width += take_from_product
+    remark_need = max(remark_need, required_remark_width)
     if remark_width > int(remark_max):
         extra = remark_width - int(remark_max)
         price_room = int(price_max) - price_width
@@ -254,7 +301,7 @@ def build_summary_html(records: list[ReportRecord], brands: list[str], layout: d
                     f'<td class="product-name-cell">{html_text(record.product_name)}</td>',
                     f'<td class="launch-date-cell">{html_text(launch)}</td>',
                     f'<td class="price-cell">{render_price_html(record.price, True)}</td>',
-                    f'<td class="remark-cell">{html_text(record.remark)}</td>',
+                    f'<td class="remark-cell">{render_remark_html(record.remark)}</td>',
                     "</tr>",
                 ]
             )
@@ -371,7 +418,7 @@ th, td {{ border: {border_width}px solid #{colors['black']}; text-align: center;
 .brand-cell, .product-name-cell {{ white-space: nowrap; word-break: keep-all; }}
 .category-cell, .launch-date-cell {{ word-break: keep-all; }}
 .price-cell {{ word-break: keep-all; overflow-wrap: normal; }}
-.remark-cell {{ word-break: keep-all; overflow-wrap: break-word; }}
+.remark-cell {{ word-break: keep-all; overflow-wrap: normal; white-space: normal; }}
 .brand-cell {{ background: #{colors['brandFill']}; font-weight: 700; }}
 .count-cell {{ font-weight: 700; font-size: 14px; }}
 .tracked {{ width: {image_layout['summary']['tableWidthPx']}px; margin: 0 auto {image_layout.get('trackedBrands', {}).get('marginBottomPx', 12)}px; font-size: {fonts['smallSizePx']}px; text-align: justify; text-align-last: left; white-space: normal; word-break: normal; overflow-wrap: normal; line-height: 1.35; }}
