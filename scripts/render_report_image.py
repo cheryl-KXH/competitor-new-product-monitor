@@ -342,7 +342,13 @@ def build_html_document(
     css = f"""
 {font_css}
 * {{ box-sizing: border-box; }}
-html, body {{ margin: 0; padding: 0; background: #{colors['white']}; }}
+html, body {{
+  margin: 0;
+  padding: 0;
+  background: #{colors['white']};
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}}
 body {{
   width: {page['widthPx']}px;
   padding: {page['paddingTopPx']}px 0 {page['paddingBottomPx']}px;

@@ -10,7 +10,7 @@
   },
   "logo": {
     "path": "assets/logo/report_logo.png",
-    "heightPx": 46,
+    "heightPx": 65,
     "marginBottomPx": 8
   },
   "fonts": {
