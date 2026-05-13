@@ -236,7 +236,7 @@ def build_summary_html(records: list[ReportRecord], brands: list[str], layout: d
     rows: list[str] = [
         '<table class="summary-table">',
         f"<colgroup>{colgroup}</colgroup>",
-        '<thead><tr class="summary-header"><th></th><th>本周新品<br>数量</th><th>品类</th><th>新品名称</th><th>上市时间</th><th>价格</th><th>备注</th></tr></thead>',
+        '<thead><tr class="summary-header"><th>品牌</th><th>本周新品<br>数量</th><th>品类</th><th>新品名称</th><th>上市时间</th><th>价格</th><th>备注</th></tr></thead>',
         "<tbody>",
     ]
     for brand, brand_records in grouped.items():
@@ -261,6 +261,14 @@ def build_summary_html(records: list[ReportRecord], brands: list[str], layout: d
             rows.append("".join(row))
     rows.extend(["</tbody>", "</table>"])
     return "\n".join(rows)
+
+
+def build_tracked_html(brands: list[str], prefix: str) -> str:
+    return escape_text(prefix + "、".join(brands))
+
+
+def render_tracked_html(brands: list[str], prefix: str) -> str:
+    return build_tracked_html(brands, prefix)
 
 
 def build_detail_html(
@@ -290,12 +298,12 @@ def build_detail_html(
             )
             rows.extend(
                 [
-                    f'<tr><th class="detail-label strong">新品名称</th><td class="detail-value name-row strong">{html_text(record.product_name)}</td></tr>',
-                    f'<tr><th class="detail-label">产品系列归属</th><td class="detail-value series-row">{html_text(record.series)}</td></tr>',
-                    f'<tr><th class="detail-label">产品卖点介绍</th><td class="detail-value long-text">{html_text(record.selling_point)}</td></tr>',
-                    f'<tr><th class="detail-label">产品价格</th><td class="detail-value">{render_price_html(record.price, False)}</td></tr>',
-                    f'<tr><th class="detail-label">原料构成</th><td class="detail-value">{html_text(record.ingredients)}</td></tr>',
-                    f'<tr><th class="detail-label image-label">产品外观</th><td class="detail-value image-cell">{image_html}</td></tr>',
+                    f'<tr class="detail-row detail-row-compact"><th class="detail-label strong">新品名称</th><td class="detail-value name-row strong">{html_text(record.product_name)}</td></tr>',
+                    f'<tr class="detail-row detail-row-compact"><th class="detail-label">产品系列归属</th><td class="detail-value series-row">{html_text(record.series)}</td></tr>',
+                    f'<tr class="detail-row detail-row-text"><th class="detail-label">产品卖点介绍</th><td class="detail-value long-text">{html_text(record.selling_point)}</td></tr>',
+                    f'<tr class="detail-row detail-row-compact"><th class="detail-label">产品价格</th><td class="detail-value">{render_price_html(record.price, False)}</td></tr>',
+                    f'<tr class="detail-row detail-row-compact"><th class="detail-label">原料构成</th><td class="detail-value">{html_text(record.ingredients)}</td></tr>',
+                    f'<tr class="detail-row detail-row-image"><th class="detail-label image-label">产品外观</th><td class="detail-value image-cell">{image_html}</td></tr>',
                 ]
             )
         rows.append("</table>")
@@ -328,7 +336,7 @@ def build_html_document(
     logo_uri = image_to_data_uri(ROOT / logo_cfg.get("path", ""))
     intro = configs["excel_layout"].get("introText", "")
     tracked_prefix = configs["excel_layout"].get("trackedBrandsPrefix", "*关注品牌包括：")
-    tracked = tracked_prefix + "、".join(brands)
+    tracked_html = render_tracked_html(brands, tracked_prefix)
     summary_html = build_summary_html(records, brands, image_layout)
     detail_html = build_detail_html(records, brands, image_layout, data_quality_report)
     css = f"""
@@ -349,23 +357,30 @@ body {{
 .intro {{ width: {image_layout['summary']['tableWidthPx']}px; margin: 0 auto 2px; font-size: {fonts['introSizePx']}px; }}
 table {{ border-collapse: collapse; table-layout: fixed; margin-left: auto; margin-right: auto; }}
 th, td {{ border: {border_width}px solid #{colors['black']}; text-align: center; vertical-align: middle; padding: 2px 4px; word-break: break-word; }}
-.summary-table {{ width: {image_layout['summary']['tableWidthPx']}px; margin-bottom: 6px; }}
+.summary-table {{ width: {image_layout['summary']['tableWidthPx']}px; margin-bottom: 2px; }}
+.summary-table th, .summary-table td {{ padding: 1px 3px; line-height: 1.35; }}
 .summary-table th {{ background: #{colors['headerFill']}; font-weight: 700; }}
 .summary-header > th {{ height: {image_layout['summary'].get('headerHeightPx', 58)}px; }}
 .summary-header > th:nth-child(2) {{ white-space: nowrap; word-break: keep-all; }}
 .brand-cell, .product-name-cell {{ white-space: nowrap; word-break: keep-all; }}
+.category-cell, .launch-date-cell {{ word-break: keep-all; }}
+.price-cell {{ word-break: keep-all; overflow-wrap: normal; }}
+.remark-cell {{ word-break: keep-all; overflow-wrap: break-word; }}
 .brand-cell {{ background: #{colors['brandFill']}; font-weight: 700; }}
 .count-cell {{ font-weight: 700; font-size: 14px; }}
-.tracked {{ width: {image_layout['summary']['tableWidthPx']}px; margin: 0 auto {image_layout.get('trackedBrands', {}).get('marginBottomPx', 18)}px; font-size: {fonts['smallSizePx']}px; text-align: left; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }}
+.tracked {{ width: {image_layout['summary']['tableWidthPx']}px; margin: 0 auto {image_layout.get('trackedBrands', {}).get('marginBottomPx', 12)}px; font-size: {fonts['smallSizePx']}px; text-align: justify; text-align-last: left; white-space: normal; word-break: normal; overflow-wrap: normal; line-height: 1.35; }}
 .detail-table {{ width: {details['tableWidthPx']}px; margin-top: 0; margin-bottom: 0; }}
 .detail-table + .detail-table {{ margin-top: -{border_width}px; }}
 .brand-header {{ height: {details.get('brandHeaderHeightPx', 20)}px; background: #{colors['detailHeaderFill']}; font-weight: 700; }}
 .detail-label {{ width: {label_width}px; background: #{colors['detailLabelFill']}; font-weight: 400; white-space: nowrap; word-break: keep-all; }}
 .detail-label.strong {{ font-weight: 700; }}
-.detail-value {{ padding: {details['cellPaddingPx']}px; }}
+.detail-table th, .detail-table td {{ line-height: 1.35; padding: 1px 3px; }}
+.detail-row-compact > th, .detail-row-compact > td {{ height: 18px; }}
+.detail-row-text > th, .detail-row-text > td {{ min-height: 38px; }}
+.detail-value {{ padding: {details['cellPaddingPx']}px 4px; }}
 .name-row, .series-row {{ background: #{colors['detailLabelFill']}; }}
 .strong {{ font-weight: 700; }}
-.long-text {{ line-height: 1.45; text-align: {image_layout.get('textAlignment', {}).get('sellingPoint', 'left')}; }}
+.long-text {{ text-align: {image_layout.get('textAlignment', {}).get('sellingPoint', 'left')}; }}
 .image-label {{ height: {details['imageHeightPx'] + 16}px; }}
 .image-cell {{ height: {details['imageHeightPx'] + 16}px; padding: 6px; }}
 .product-image {{ display: block; max-height: {details['imageHeightPx']}px; max-width: {details['imageMaxWidthPx']}px; margin: 0 auto; object-fit: contain; }}
@@ -387,7 +402,7 @@ th, td {{ border: {border_width}px solid #{colors['black']}; text-align: center;
 <h1 class="title">{escape_text(title_text(start, end, configs))}</h1>
 <div class="intro">{escape_text(intro)}</div>
 {summary_html}
-<div class="tracked">{escape_text(tracked)}</div>
+<div class="tracked">{tracked_html}</div>
 {detail_html}
 </main>
 </body>

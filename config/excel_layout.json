@@ -62,6 +62,7 @@
       "remark": "H"
     },
     "headers": {
+      "brand": "品牌",
       "count": "本周新品数量",
       "category": "品类",
       "productName": "新品名称",

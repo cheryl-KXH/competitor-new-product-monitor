@@ -1217,7 +1217,7 @@ def build_workbook(
     for key in ("brand", "count", "category", "productName", "launchDate", "price", "remark"):
         col = summary_cols[key]
         cell = ws[f"{col}{header_row}"]
-        cell.value = "" if key == "brand" else headers[key]
+        cell.value = headers.get(key, "品牌" if key == "brand" else "")
         apply_base_style(cell, chinese_font, bold=True, fill=colors["headerFill"], border=border)
     ws.row_dimensions[header_row].height = heights["summaryHeader"]
 

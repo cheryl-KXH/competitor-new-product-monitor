@@ -3,7 +3,7 @@
   "description": "HTML/PNG 长图排版配置。用于输出接近 Excel 视觉的周报图片，不影响 Excel 生成配置。",
   "outputDirectory": "outputs",
   "page": {
-    "widthPx": 640,
+    "widthPx": 672,
     "paddingTopPx": 28,
     "paddingBottomPx": 28,
     "background": "FFFFFF"
@@ -31,12 +31,12 @@
     "detailLabelFill": "DAE3F4"
   },
   "summary": {
-    "tableWidthPx": 560,
+    "tableWidthPx": 588,
     "fixedColumnWidthsPx": {
       "brand": 78,
       "count": 54,
-      "category": 56,
-      "launchDate": 66
+      "category": 52,
+      "launchDate": 60
     },
     "flexColumns": ["productName", "price", "remark"],
     "flexColumnMinMaxPx": {
@@ -50,28 +50,28 @@
       "remark": 16
     },
     "rowHeightByLineCountPx": {
-      "1": 28,
-      "2": 48,
-      "3": 68,
-      "4": 88,
-      "5": 108
+      "1": 20,
+      "2": 32,
+      "3": 44,
+      "4": 56,
+      "5": 68
     },
-    "headerHeightPx": 58
+    "headerHeightPx": 20
   },
   "trackedBrands": {
     "wrap": true,
-    "marginBottomPx": 18
+    "marginBottomPx": 12
   },
   "details": {
-    "tableWidthPx": 560,
+    "tableWidthPx": 588,
     "labelWidthSource": "summary.brand",
     "imageHeightPx": 151,
     "imageMaxWidthPx": 260,
-    "cellPaddingPx": 4,
-    "brandHeaderHeightPx": 20
+    "cellPaddingPx": 3,
+    "brandHeaderHeightPx": 18
   },
   "textAlignment": {
-    "sellingPoint": "left"
+    "sellingPoint": "justify"
   },
   "border": {
     "widthPx": 1
