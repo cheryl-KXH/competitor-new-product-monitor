@@ -18,6 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start-date", help="开始日期，格式 YYYY-MM-DD")
     parser.add_argument("--end-date", help="结束日期，格式 YYYY-MM-DD")
     parser.add_argument("--brands", help="品牌范围，使用英文逗号分隔，例如：霸王茶姬,古茗")
+    parser.add_argument("--brand-group", help="品牌组编号，例如：1、2、3；--brands 优先于本参数")
     parser.add_argument(
         "--output-mode",
         choices=sorted(VALID_OUTPUT_MODES),
@@ -81,11 +82,16 @@ def main() -> int:
         print(f"WARNING: {warning}")
 
     start, end = excel_report.resolve_date_window(args)
-    brands = excel_report.parse_brands(args.brands, configs["report_rules"])
+    brands = excel_report.parse_brands(args.brands, configs["report_rules"], args.brand_group)
     table_fields = excel_report.fetch_table_fields(configs)
     field_ids = excel_report.resolve_field_ids(configs["field_mapping"], table_fields)
+    default_brand_order = excel_report.brand_option_order(table_fields, field_ids) if not brands else []
+    if not brands and not default_brand_order:
+        print("WARNING: 未从钉钉品牌字段读取到标签列表顺序，默认按本次记录首次出现顺序输出品牌。")
     raw_records = excel_report.query_records(configs, field_ids, start, end)
-    records = excel_report.normalize_records(raw_records, configs, field_ids, brands)
+    records = excel_report.normalize_records(raw_records, configs, field_ids, brands, default_brand_order)
+    if not brands:
+        brands = excel_report.effective_output_brands(records, default_brand_order)
     data_quality_report = excel_report.collect_data_quality_report(records, configs["report_rules"])
 
     stem = report_stem(start, end)

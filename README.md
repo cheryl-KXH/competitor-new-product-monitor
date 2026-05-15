@@ -158,11 +158,22 @@ python scripts/generate_weekly_report.py --start-date 2026-05-02 --end-date 2026
 python scripts/generate_weekly_report.py --brands 霸王茶姬,古茗,乐乐茶
 ```
 
+按品牌组输出：
+
+```bash
+python scripts/generate_weekly_report.py --brand-group 1
+python scripts/generate_weekly_report.py --brand-group 2
+python scripts/generate_weekly_report.py --brand-group 3
+python scripts/generate_weekly_outputs.py --brand-group 1
+```
+
 同时指定周期和品牌：
 
 ```bash
 python scripts/generate_weekly_report.py --start-date 2026-05-02 --end-date 2026-05-08 --brands 霸王茶姬,古茗
 ```
+
+如果同时传 `--brands` 和 `--brand-group`，脚本优先使用 `--brands` 的手动品牌范围。
 
 指定输出文件：
 
@@ -188,7 +199,11 @@ python scripts/generate_weekly_report.py --explain-config
 
 默认跟踪品牌：
 
-霸王茶姬、茶百道、古茗、奈雪的茶、乐乐茶、阿嬷手作、去茶山、爷爷不泡茶、瑞幸、上山喝茶、茉莉奶白
+默认不传 `--brands` 或 `--brand-group` 时，不按固定品牌清单筛选，按本次钉钉表取数结果里实际出现的品牌输出；品牌顺序按钉钉 AI 表 `品牌` 字段的标签列表顺序。品牌组配置在 `config/report_rules.json` 的 `brandGroups`，仅在手动传 `--brand-group` 时用于筛选：
+
+- `1`：霸王茶姬、茶百道、古茗、奈雪的茶、乐乐茶、阿嬷手作、去茶山、爷爷不泡茶、瑞幸、上山喝茶、茉莉奶白
+- `2`：包含 `1` 组全部品牌，另加混果汁、Blueglass、茉酸奶、荔其
+- `3`：梨村茶铺、BeFineCha 百分茶、Matcha Wang、BASAO康普茶、元古茶铺、李茶的茶、阿嬷手作、眷茶、去茶山、上山喝茶、另茶、BlackTree黑树、tea'stone、大地茶场tazaTe、小山堂、CHARLIETOWN红茶公司、裕莲茶楼、周四晚、桂茶白、逛山、椿田熟成茶行、开吉茶馆、轻茶山外、淡马茶坊、茶月山、高山3班、ops、泰柯茶园、唐沫茶兮
 
 日期规则：
 

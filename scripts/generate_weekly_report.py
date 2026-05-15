@@ -102,8 +102,9 @@ def validate_config(configs: dict[str, dict[str, Any]]) -> list[str]:
             warnings.append(f"field_mapping.json 缺少必需标准字段：{key}")
 
     rules = configs["report_rules"]
-    if not rules.get("defaultBrands"):
-        warnings.append("report_rules.json 缺少 defaultBrands")
+    brand_groups = rules.get("brandGroups")
+    if not isinstance(brand_groups, dict) or not brand_groups:
+        warnings.append("report_rules.json 缺少 brandGroups")
     if not rules.get("categoryRule", {}).get("priority"):
         warnings.append("report_rules.json 缺少 categoryRule.priority")
 
@@ -134,14 +135,19 @@ def explain_config(configs: dict[str, dict[str, Any]]) -> str:
         f"- 钉钉连接：baseId={dingtalk.get('baseId')}，tableId={dingtalk.get('tableId')}，"
         f"连接方式={'streamableHttpUrl' if dingtalk.get('streamableHttpUrl') else dingtalk.get('serverName')}",
         f"- 默认周期：周五导出上周六到本周五，周一导出上一个完整周六到周五",
-        f"- 默认品牌：{'、'.join(rules.get('defaultBrands', []))}",
+        f"- 默认品牌：不传 --brands 或 --brand-group 时，按本次钉钉表取数结果里的品牌输出，顺序按钉钉品牌字段标签列表",
         f"- 品类规则：{' > '.join(rules.get('categoryRule', {}).get('priority', []))} > 主品类",
         f"- 备注规则：{'，'.join(rules.get('remarkRule', {}).get('order', []))}",
         f"- 图片高度：{layout.get('image', {}).get('heightCm')}cm",
         f"- 中文字体：{font_files.get('chineseFont', {}).get('excelName')}",
         f"- 英文字体：{font_files.get('latinFont', {}).get('excelName')}",
-        "- 标准字段：",
+        "- 品牌组：",
     ]
+    for group_key, group_brands in rules.get("brandGroups", {}).items():
+        lines.append(f"  - {group_key}: {'、'.join(group_brands)}")
+    lines.extend([
+        "- 标准字段：",
+    ])
     for key, cfg in fields.items():
         names = " / ".join(cfg.get("fieldNames", []))
         lines.append(f"  - {key}: {cfg.get('label')} ({names})")
@@ -153,6 +159,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start-date", help="开始日期，格式 YYYY-MM-DD")
     parser.add_argument("--end-date", help="结束日期，格式 YYYY-MM-DD")
     parser.add_argument("--brands", help="品牌范围，使用英文逗号分隔，例如：霸王茶姬,古茗")
+    parser.add_argument("--brand-group", help="品牌组编号，例如：1、2、3；--brands 优先于本参数")
     parser.add_argument("--output", help="输出 xlsx 路径")
     parser.add_argument("--validate-config", action="store_true", help="校验配置后退出")
     parser.add_argument("--explain-config", action="store_true", help="解释当前配置后退出")
@@ -178,9 +185,15 @@ def resolve_date_window(args: argparse.Namespace) -> tuple[date, date]:
     return start, end
 
 
-def parse_brands(arg: str | None, rules: dict[str, Any]) -> list[str]:
+def parse_brands(arg: str | None, rules: dict[str, Any], brand_group: str | None = None) -> list[str]:
     if not arg:
-        return list(rules.get("defaultBrands", []))
+        if brand_group:
+            groups = rules.get("brandGroups", {})
+            if brand_group not in groups:
+                available = "、".join(sorted(groups)) or "无"
+                raise SystemExit(f"--brand-group 不存在：{brand_group}。可用值：{available}")
+            return list(groups[brand_group])
+        return []
     brands = [part.strip() for part in arg.split(",") if part.strip()]
     if not brands:
         raise SystemExit("--brands 不能为空")
@@ -244,6 +257,57 @@ def resolve_field_ids(field_mapping: dict[str, Any], table_fields: list[dict[str
     if missing_required:
         raise SystemExit("缺少必需钉钉字段：" + "、".join(missing_required))
     return resolved
+
+
+def extract_option_name(option: Any) -> str:
+    if isinstance(option, str):
+        return option.strip()
+    if isinstance(option, dict):
+        for key in ("name", "label", "text", "value"):
+            value = option.get(key)
+            if value:
+                return str(value).strip()
+    return ""
+
+
+def extract_options_from_container(container: Any) -> list[str]:
+    if not isinstance(container, dict):
+        return []
+    for key in ("options", "choices", "items"):
+        raw_options = container.get(key)
+        if isinstance(raw_options, list):
+            names = [extract_option_name(option) for option in raw_options]
+            return [name for name in names if name]
+    return []
+
+
+def brand_option_order(table_fields: list[dict[str, Any]], field_ids: dict[str, str]) -> list[str]:
+    brand_field_id = field_ids.get("brand")
+    if not brand_field_id:
+        return []
+    brand_field = next((field for field in table_fields if field.get("fieldId") == brand_field_id), None)
+    if not brand_field:
+        return []
+    candidates = [
+        brand_field,
+        brand_field.get("property"),
+        brand_field.get("fieldProperty"),
+        brand_field.get("typeOptions"),
+        brand_field.get("config"),
+    ]
+    for candidate in candidates:
+        options = extract_options_from_container(candidate)
+        if options:
+            return list(dict.fromkeys(options))
+    return []
+
+
+def effective_output_brands(records: list[ReportRecord], preferred_order: list[str]) -> list[str]:
+    grouped = set(record.brand for record in records)
+    ordered = [brand for brand in preferred_order if brand in grouped]
+    ordered_set = set(ordered)
+    ordered.extend(record.brand for record in records if record.brand not in ordered_set and not ordered_set.add(record.brand))
+    return ordered
 
 
 def query_records(
@@ -393,10 +457,12 @@ def normalize_records(
     configs: dict[str, dict[str, Any]],
     field_ids: dict[str, str],
     brands: list[str],
+    sort_brands: list[str] | None = None,
 ) -> list[ReportRecord]:
     fields_cfg = configs["field_mapping"]["standardFields"]
     rules = configs["report_rules"]
     brand_set = set(brands)
+    brand_order = {brand: i for i, brand in enumerate(sort_brands or brands)}
     normalized: list[ReportRecord] = []
     seen_record_ids: set[str] = set()
     seen_business_keys: set[tuple[str, str, str, str, str]] = set()
@@ -411,8 +477,10 @@ def normalize_records(
 
         brand = str(values.get("brand") or "").strip()
         product_name = str(values.get("productName") or "").strip()
-        if not brand or not product_name or brand not in brand_set:
+        if not brand or not product_name or (brand_set and brand not in brand_set):
             continue
+        if brand not in brand_order:
+            brand_order[brand] = len(brand_order)
 
         category = compute_category(values, rules)
         remark = compute_remark(values, rules)
@@ -441,7 +509,6 @@ def normalize_records(
         seen_business_keys.add(business_key)
         normalized.append(record)
 
-    brand_order = {brand: i for i, brand in enumerate(brands)}
     normalized.sort(
         key=lambda r: (
             brand_order.get(r.brand, 9999),
@@ -452,6 +519,10 @@ def normalize_records(
     if skipped_duplicates:
         print_duplicate_warning("标准化重复记录", skipped_duplicates)
     return normalized
+
+
+def ordered_record_brands(records: list[ReportRecord]) -> list[str]:
+    return list(dict.fromkeys(record.brand for record in records))
 
 
 def compute_category(values: dict[str, Any], rules: dict[str, Any]) -> str:
@@ -1407,11 +1478,16 @@ def main() -> int:
         return 0
 
     start, end = resolve_date_window(args)
-    brands = parse_brands(args.brands, configs["report_rules"])
+    brands = parse_brands(args.brands, configs["report_rules"], args.brand_group)
     table_fields = fetch_table_fields(configs)
     field_ids = resolve_field_ids(configs["field_mapping"], table_fields)
+    default_brand_order = brand_option_order(table_fields, field_ids) if not brands else []
+    if not brands and not default_brand_order:
+        print("WARNING: 未从钉钉品牌字段读取到标签列表顺序，默认按本次记录首次出现顺序输出品牌。")
     raw_records = query_records(configs, field_ids, start, end)
-    records = normalize_records(raw_records, configs, field_ids, brands)
+    records = normalize_records(raw_records, configs, field_ids, brands, default_brand_order)
+    if not brands:
+        brands = effective_output_brands(records, default_brand_order)
     data_quality_report = collect_data_quality_report(records, configs["report_rules"])
     output_path = Path(args.output) if args.output else default_output_path(start, end, configs["excel_layout"])
     if not output_path.is_absolute():
