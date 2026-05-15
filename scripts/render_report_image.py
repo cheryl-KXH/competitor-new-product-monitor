@@ -100,7 +100,9 @@ def html_text(value: Any) -> str:
 
 
 def render_remark_html(value: str) -> str:
-    text = re.sub(r"([A-Za-z0-9]+)([\u4e00-\u9fff])", r"\1<wbr>\2", str(value or ""))
+    text = str(value or "")
+    text = re.sub(r"([\u4e00-\u9fff])([A-Za-z0-9]+)", r"\1<wbr>\2", text)
+    text = re.sub(r"([A-Za-z0-9]+)([\u4e00-\u9fff])", r"\1<wbr>\2", text)
     break_after_chars = set(" 、/-")
     parts: list[str] = []
     index = 0
@@ -124,15 +126,24 @@ def render_remark_html(value: str) -> str:
     return "".join(parts)
 
 
+PRICE_SOFT_BREAK = "\ue000"
+
+
+def insert_price_soft_breaks(text: str) -> str:
+    return re.sub(r"(?<=[)）])(?=[(（])", PRICE_SOFT_BREAK, text)
+
+
 def render_price_html(value: str, wrap_after_slash: bool) -> str:
     text = clean_price_text(value)
     if wrap_after_slash and "/" in text:
         text = "/\n".join(part.strip() for part in text.split("/") if part.strip())
+    else:
+        text = insert_price_soft_breaks(text)
 
     escaped = html.escape(text, quote=True)
     pattern = re.compile(r"(?<=[(（])(\d+(?:\.\d+)?\s*元)(?=[)）])")
     escaped = pattern.sub(r'<span class="strike">\1</span>', escaped)
-    return escaped.replace("\n", "<br>")
+    return escaped.replace(PRICE_SOFT_BREAK, "<wbr>").replace("\n", "<br>")
 
 
 def visual_len(text: str) -> float:
@@ -168,6 +179,17 @@ def price_blocks(text: str) -> list[str]:
     return [part.strip() for part in value.split("/") if part.strip()] or [value]
 
 
+def safe_price_width_segments(text: str) -> list[str]:
+    value = clean_price_text(text)
+    if "/" in value:
+        return price_blocks(value)
+    segments: list[str] = []
+    for block in price_blocks(value):
+        pieces = re.split(r"(?<=[)）])(?=[(（])", block)
+        segments.extend(piece.strip() for piece in pieces if piece.strip())
+    return segments or [value]
+
+
 def longest_ascii_token(text: str) -> str:
     tokens = re.findall(r"[A-Za-z0-9]+", str(text or ""))
     return max(tokens, key=len, default="")
@@ -184,6 +206,13 @@ def estimate_wrapped_lines(text: str, width_px: int, font_size_px: int, explicit
     return max(1, lines)
 
 
+SUMMARY_COLUMN_KEYS = ("brand", "count", "category", "productName", "launchDate", "price", "remark")
+
+
+def summary_table_width(columns: dict[str, int]) -> int:
+    return sum(int(columns[key]) for key in SUMMARY_COLUMN_KEYS)
+
+
 def compute_summary_column_widths(records: list[ReportRecord], layout: dict[str, Any]) -> dict[str, int]:
     summary = layout["summary"]
     fixed = dict(summary.get("fixedColumnWidthsPx", {}))
@@ -198,48 +227,41 @@ def compute_summary_column_widths(records: list[ReportRecord], layout: dict[str,
     max_name = max((record.product_name for record in records), key=visual_len, default="")
     name_min, name_max = min_max.get("productName", [118, 190])
     name_need = text_width_px(max_name, font_size, int(padding.get("productName", 18)))
-    product_width = clamp(name_need, int(name_min), int(name_max))
 
     price_min, price_max = min_max.get("price", [100, 170])
     remark_min, remark_max = min_max.get("remark", [68, 150])
-    product_width = min(product_width, max(int(name_min), remaining - int(price_min) - int(remark_min)))
-    remaining_after_name = remaining - product_width
 
-    longest_price = max((block for record in records for block in price_blocks(record.price)), key=visual_len, default="")
+    longest_price = max((block for record in records for block in safe_price_width_segments(record.price)), key=visual_len, default="")
     price_need = text_width_px(longest_price, font_size, int(padding.get("price", 18)))
-    price_width = clamp(price_need, int(price_min), min(int(price_max), remaining_after_name - int(remark_min)))
-
-    remark_width = remaining_after_name - price_width
     longest_remark = max((record.remark for record in records), key=visual_len, default="")
     remark_padding = int(padding.get("remark", 16))
     remark_need = text_width_px(longest_remark, font_size, remark_padding)
     longest_remark_token = max((longest_ascii_token(record.remark) for record in records), key=len, default="")
     token_need = text_width_px(longest_remark_token, font_size, remark_padding)
-    required_remark_width = clamp(token_need, int(remark_min), int(remark_max))
-    if remark_width < required_remark_width:
-        deficit = required_remark_width - remark_width
-        product_room = product_width - int(name_min)
-        take_from_product = min(deficit, max(0, product_room))
-        product_width -= take_from_product
-        remark_width += take_from_product
-        deficit -= take_from_product
-        emergency_product_floor = max(1, int(name_min) - 12)
-        emergency_product_room = product_width - emergency_product_floor
-        take_from_product = min(deficit, max(0, emergency_product_room))
-        product_width -= take_from_product
-        remark_width += take_from_product
-    remark_need = max(remark_need, required_remark_width)
-    if remark_width > int(remark_max):
-        extra = remark_width - int(remark_max)
-        price_room = int(price_max) - price_width
-        give_to_price = min(extra, max(0, price_room))
-        price_width += give_to_price
-        remark_width -= give_to_price
-    if remark_need < remark_width and price_width < int(price_max):
-        spare = remark_width - max(int(remark_min), remark_need)
-        give_to_price = min(spare, int(price_max) - price_width)
-        price_width += give_to_price
-        remark_width -= give_to_price
+
+    product_width = max(int(name_min), name_need)
+    price_width = max(int(price_min), price_need)
+    remark_width = max(int(remark_min), token_need)
+    hard_width = fixed_width + product_width + price_width + remark_width
+    target_width = max(table_width, hard_width)
+    extra = target_width - hard_width
+
+    remark_target = max(remark_width, min(max(remark_need, token_need), int(remark_max)))
+    give_to_remark = min(extra, max(0, remark_target - remark_width))
+    remark_width += give_to_remark
+    extra -= give_to_remark
+
+    product_target = max(product_width, int(name_max))
+    give_to_product = min(extra, max(0, product_target - product_width))
+    product_width += give_to_product
+    extra -= give_to_product
+
+    price_target = max(price_width, int(price_max))
+    give_to_price = min(extra, max(0, price_target - price_width))
+    price_width += give_to_price
+    extra -= give_to_price
+
+    remark_width += extra
 
     return {
         "brand": int(fixed["brand"]),
@@ -254,11 +276,13 @@ def compute_summary_column_widths(records: list[ReportRecord], layout: dict[str,
 
 def summary_line_count(record: ReportRecord, columns: dict[str, int], layout: dict[str, Any]) -> int:
     font_size = int(layout.get("fonts", {}).get("defaultSizePx", 12))
-    price_lines = len(price_blocks(record.price)) if "/" in clean_price_text(record.price) else estimate_wrapped_lines(record.price, columns["price"], font_size)
+    price_lines = max(
+        len(price_blocks(record.price)),
+        estimate_wrapped_lines(max(safe_price_width_segments(record.price), key=visual_len, default=""), columns["price"], font_size),
+    )
     return max(
         1,
         estimate_wrapped_lines(record.category, columns["category"], font_size),
-        estimate_wrapped_lines(record.product_name, columns["productName"], font_size),
         price_lines,
         estimate_wrapped_lines(record.remark, columns["remark"], font_size),
     )
@@ -323,11 +347,13 @@ def build_detail_html(
     brands: list[str],
     layout: dict[str, Any],
     data_quality_report: DataQualityReport,
+    table_width: int | None = None,
 ) -> str:
     grouped = grouped_records(records, brands)
     summary_columns = compute_summary_column_widths(records, layout)
     label_width = summary_columns["brand"]
-    value_width = int(layout["details"]["tableWidthPx"]) - label_width
+    detail_table_width = table_width if table_width is not None else int(layout["details"]["tableWidthPx"])
+    value_width = detail_table_width - label_width
     colgroup = f'<colgroup><col style="width:{label_width}px"><col style="width:{value_width}px"></colgroup>'
     rows: list[str] = []
     for brand, brand_records in grouped.items():
@@ -372,6 +398,11 @@ def build_html_document(
     details = image_layout["details"]
     border_width = int(image_layout.get("border", {}).get("widthPx", 1))
     summary_columns = compute_summary_column_widths(records, image_layout)
+    summary_width = summary_table_width(summary_columns)
+    configured_summary_width = int(image_layout["summary"]["tableWidthPx"])
+    page_margin = max(40, int(page["widthPx"]) - configured_summary_width)
+    page_width = max(int(page["widthPx"]), summary_width + page_margin)
+    detail_table_width = max(int(details["tableWidthPx"]), summary_width)
     label_width = summary_columns["brand"]
     row_heights = image_layout.get("summary", {}).get("rowHeightByLineCountPx", {})
     row_height_css = "\n".join(
@@ -385,7 +416,7 @@ def build_html_document(
     tracked_prefix = configs["excel_layout"].get("trackedBrandsPrefix", "*关注品牌包括：")
     tracked_html = render_tracked_html(brands, tracked_prefix)
     summary_html = build_summary_html(records, brands, image_layout)
-    detail_html = build_detail_html(records, brands, image_layout, data_quality_report)
+    detail_html = build_detail_html(records, brands, image_layout, data_quality_report, detail_table_width)
     css = f"""
 {font_css}
 * {{ box-sizing: border-box; }}
@@ -397,32 +428,33 @@ html, body {{
   text-size-adjust: 100%;
 }}
 body {{
-  width: {page['widthPx']}px;
+  width: {page_width}px;
   padding: {page['paddingTopPx']}px 0 {page['paddingBottomPx']}px;
   color: #{colors['black']};
   font-family: {fonts['family']};
   font-size: {fonts['defaultSizePx']}px;
   line-height: 1.35;
 }}
-.report {{ width: {page['widthPx']}px; margin: 0 auto; }}
+.report {{ width: {page_width}px; margin: 0 auto; }}
 .logo {{ display: block; height: {logo_cfg.get('heightPx', 46)}px; margin: 0 auto {logo_cfg.get('marginBottomPx', 8)}px; }}
 .title {{ text-align: center; font-size: {fonts['titleSizePx']}px; font-weight: 700; margin: 0 0 18px; }}
-.intro {{ width: {image_layout['summary']['tableWidthPx']}px; margin: 0 auto 2px; font-size: {fonts['introSizePx']}px; }}
+.intro {{ width: {summary_width}px; margin: 0 auto 2px; font-size: {fonts['introSizePx']}px; }}
 table {{ border-collapse: collapse; table-layout: fixed; margin-left: auto; margin-right: auto; }}
 th, td {{ border: {border_width}px solid #{colors['black']}; text-align: center; vertical-align: middle; padding: 2px 4px; word-break: break-word; }}
-.summary-table {{ width: {image_layout['summary']['tableWidthPx']}px; margin-bottom: 2px; }}
+.summary-table {{ width: {summary_width}px; margin-bottom: 2px; }}
 .summary-table th, .summary-table td {{ padding: 1px 3px; line-height: 1.35; }}
 .summary-table th {{ background: #{colors['headerFill']}; font-weight: 700; }}
 .summary-header > th {{ height: {image_layout['summary'].get('headerHeightPx', 58)}px; }}
 .summary-header > th:nth-child(2) {{ white-space: nowrap; word-break: keep-all; }}
-.brand-cell, .product-name-cell {{ white-space: nowrap; word-break: keep-all; }}
+.brand-cell {{ white-space: nowrap; word-break: keep-all; }}
+.product-name-cell {{ white-space: nowrap; word-break: keep-all; overflow-wrap: normal; }}
 .category-cell, .launch-date-cell {{ word-break: keep-all; }}
 .price-cell {{ word-break: keep-all; overflow-wrap: normal; }}
 .remark-cell {{ word-break: keep-all; overflow-wrap: normal; white-space: normal; }}
 .brand-cell {{ background: #{colors['brandFill']}; font-weight: 700; }}
 .count-cell {{ font-weight: 700; font-size: 14px; }}
-.tracked {{ width: {image_layout['summary']['tableWidthPx']}px; margin: 0 auto {image_layout.get('trackedBrands', {}).get('marginBottomPx', 12)}px; font-size: {fonts['smallSizePx']}px; text-align: justify; text-align-last: left; white-space: normal; word-break: normal; overflow-wrap: normal; line-height: 1.35; }}
-.detail-table {{ width: {details['tableWidthPx']}px; margin-top: 0; margin-bottom: 0; }}
+.tracked {{ width: {summary_width}px; margin: 0 auto {image_layout.get('trackedBrands', {}).get('marginBottomPx', 12)}px; font-size: {fonts['smallSizePx']}px; text-align: justify; text-align-last: left; white-space: normal; word-break: normal; overflow-wrap: normal; line-height: 1.35; }}
+.detail-table {{ width: {detail_table_width}px; margin-top: 0; margin-bottom: 0; }}
 .detail-table + .detail-table {{ margin-top: -{border_width}px; }}
 .brand-header {{ height: {details.get('brandHeaderHeightPx', 20)}px; background: #{colors['detailHeaderFill']}; font-weight: 700; }}
 .detail-label {{ width: {label_width}px; background: #{colors['detailLabelFill']}; font-weight: 400; white-space: nowrap; word-break: keep-all; }}
