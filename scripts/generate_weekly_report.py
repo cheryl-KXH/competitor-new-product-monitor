@@ -133,7 +133,7 @@ def explain_config(configs: dict[str, dict[str, Any]]) -> str:
         "当前配置摘要：",
         f"- 钉钉连接：baseId={dingtalk.get('baseId')}，tableId={dingtalk.get('tableId')}，"
         f"连接方式={'streamableHttpUrl' if dingtalk.get('streamableHttpUrl') else dingtalk.get('serverName')}",
-        f"- 默认周期：最近一个完整周六到周五",
+        f"- 默认周期：周五导出上周六到本周五，周一导出上一个完整周六到周五",
         f"- 默认品牌：{'、'.join(rules.get('defaultBrands', []))}",
         f"- 品类规则：{' > '.join(rules.get('categoryRule', {}).get('priority', []))} > 主品类",
         f"- 备注规则：{'，'.join(rules.get('remarkRule', {}).get('order', []))}",
@@ -171,6 +171,7 @@ def resolve_date_window(args: argparse.Namespace) -> tuple[date, date]:
 
     today = date.today()
     friday_weekday = 4
+    # Friday uses the current day as the window end; Monday rolls back to the previous Friday.
     days_since_friday = (today.weekday() - friday_weekday) % 7
     end = today - timedelta(days=days_since_friday)
     start = end - timedelta(days=6)

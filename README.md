@@ -140,7 +140,7 @@ python scripts/generate_weekly_outputs.py --output-mode all
 
 现有 Excel 单独生成脚本仍然保留：
 
-默认生成最近一个完整“周六到周五”周期：
+默认按“周六到周五”生成：周五导出上周六到本周五，周一导出上一个完整周六到周五。
 
 ```bash
 python scripts/generate_weekly_report.py
@@ -192,7 +192,8 @@ python scripts/generate_weekly_report.py --explain-config
 
 日期规则：
 
-- 默认取最近一个完整“周六到周五”。
+- 默认按“周六到周五”取数；周五运行会导出上周六到本周五，周一运行会导出上一个完整周六到周五。
+- 例如 2026-05-15 周五运行默认取 `2026-05-09` 到 `2026-05-15`；2026-05-18 周一运行也默认取 `2026-05-09` 到 `2026-05-15`。
 - 可以用 `--start-date` 和 `--end-date` 覆盖。
 
 品类规则：

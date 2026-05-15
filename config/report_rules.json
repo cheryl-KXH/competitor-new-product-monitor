@@ -3,6 +3,7 @@
   "description": "这份周报的业务规则。后续可用自然语言要求 Codex 修改本文件。",
   "defaultDateWindow": {
     "type": "last_complete_saturday_to_friday",
+    "description": "默认导出周期按周六到周五计算：周五导出上周六到本周五；周一导出上一个完整周六到周五。",
     "startWeekday": "saturday",
     "endWeekday": "friday"
   },
