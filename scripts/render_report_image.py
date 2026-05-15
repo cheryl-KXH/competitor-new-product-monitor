@@ -429,13 +429,13 @@ html, body {{
 }}
 body {{
   width: {page_width}px;
-  padding: {page['paddingTopPx']}px 0 {page['paddingBottomPx']}px;
+  padding: 0;
   color: #{colors['black']};
   font-family: {fonts['family']};
   font-size: {fonts['defaultSizePx']}px;
   line-height: 1.35;
 }}
-.report {{ width: {page_width}px; margin: 0 auto; }}
+.report {{ width: {page_width}px; margin: 0 auto; padding: {page['paddingTopPx']}px 0 {page['paddingBottomPx']}px; }}
 .logo {{ display: block; height: {logo_cfg.get('heightPx', 46)}px; margin: 0 auto {logo_cfg.get('marginBottomPx', 8)}px; }}
 .title {{ text-align: center; font-size: {fonts['titleSizePx']}px; font-weight: 700; margin: 0 0 18px; }}
 .intro {{ width: {summary_width}px; margin: 0 auto 2px; font-size: {fonts['introSizePx']}px; }}
@@ -496,11 +496,13 @@ th, td {{ border: {border_width}px solid #{colors['black']}; text-align: center;
 
 
 async def screenshot_html_with_playwright(html_path: Path, png_path: Path, image_layout: dict[str, Any]) -> None:
+    from PIL import Image as PILImage
     from playwright.async_api import async_playwright
 
     render_cfg = image_layout.get("render", {})
     width = int(image_layout.get("page", {}).get("widthPx", 640))
     scale = int(render_cfg.get("deviceScaleFactor", 2))
+    max_chunk_height = int(render_cfg.get("maxScreenshotChunkHeightPx", 4000))
     executable = render_cfg.get("chromeExecutable")
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -509,7 +511,65 @@ async def screenshot_html_with_playwright(html_path: Path, png_path: Path, image
         )
         page = await browser.new_page(viewport={"width": width, "height": 900}, device_scale_factor=scale)
         await page.goto(html_path.resolve().as_uri(), wait_until="networkidle")
-        await page.screenshot(path=str(png_path), full_page=True)
+        await page.evaluate("document.fonts && document.fonts.ready")
+        await page.wait_for_function(
+            "() => Array.from(document.images).every(img => img.complete)",
+            timeout=30000,
+        )
+        report_box = await page.locator(".report").evaluate(
+            """element => {
+                const rect = element.getBoundingClientRect();
+                return {
+                    x: rect.x,
+                    y: rect.y,
+                    width: Math.ceil(Math.max(element.scrollWidth, rect.width)),
+                    height: Math.ceil(Math.max(element.scrollHeight, rect.height))
+                };
+            }"""
+        )
+        await page.set_viewport_size({"width": int(report_box["width"]), "height": int(report_box["height"])})
+        report_height = int(report_box["height"])
+        if report_height <= max_chunk_height:
+            try:
+                await page.locator(".report").screenshot(path=str(png_path))
+            except Exception:
+                await page.screenshot(
+                    path=str(png_path),
+                    clip={
+                        "x": float(report_box["x"]),
+                        "y": float(report_box["y"]),
+                        "width": float(report_box["width"]),
+                        "height": float(report_box["height"]),
+                    },
+                )
+        else:
+            chunks: list[PILImage.Image] = []
+            y = 0
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_root = Path(temp_dir)
+                while y < report_height:
+                    chunk_height = min(max_chunk_height, report_height - y)
+                    await page.set_viewport_size({"width": int(report_box["width"]), "height": chunk_height})
+                    await page.evaluate("(scrollY) => window.scrollTo(0, scrollY)", y)
+                    chunk_path = temp_root / f"chunk_{len(chunks)}.png"
+                    await page.screenshot(
+                        path=str(chunk_path),
+                        clip={
+                            "x": 0,
+                            "y": 0,
+                            "width": float(report_box["width"]),
+                            "height": float(chunk_height),
+                        },
+                    )
+                    chunks.append(PILImage.open(chunk_path).copy())
+                    y += chunk_height
+            if chunks:
+                stitched = PILImage.new("RGB", (chunks[0].width, sum(chunk.height for chunk in chunks)), "white")
+                top = 0
+                for chunk in chunks:
+                    stitched.paste(chunk.convert("RGB"), (0, top))
+                    top += chunk.height
+                stitched.save(png_path)
         await browser.close()
 
 
