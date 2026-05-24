@@ -53,6 +53,7 @@ class ReportRecord:
     ingredients: str
     image_urls: list[str]
     remark: str
+    source_index: int = 0
 
 
 @dataclass
@@ -395,13 +396,7 @@ def extract_cell(raw: Any, extract: str) -> Any:
             text = str(raw)
         return clean_text(text)
     if extract == "attachment_image_urls":
-        if not isinstance(raw, list):
-            return []
-        urls = []
-        for item in raw:
-            if isinstance(item, dict) and item.get("type") == "image" and item.get("url"):
-                urls.append(item["url"])
-        return urls
+        return extract_attachment_image_urls(raw)
     if extract == "date":
         return parse_date_value(raw)
     if extract == "generic":
@@ -411,6 +406,35 @@ def extract_cell(raw: Any, extract: str) -> Any:
             return [extract_cell(item, "generic") for item in raw]
         return raw
     return clean_text(str(raw))
+
+
+def extract_attachment_image_urls(raw: Any) -> list[str]:
+    if not raw:
+        return []
+    items = raw if isinstance(raw, list) else [raw]
+    urls: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        nested = item.get("files") or item.get("attachments")
+        if isinstance(nested, list):
+            urls.extend(extract_attachment_image_urls(nested))
+            continue
+        file_type = str(item.get("type") or item.get("mimeType") or item.get("contentType") or "").lower()
+        filename = str(item.get("filename") or item.get("fileName") or item.get("name") or "").lower()
+        is_image = (
+            file_type == "image"
+            or file_type.startswith("image/")
+            or filename.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"))
+        )
+        if not is_image:
+            continue
+        for key in ("url", "resourceUrl", "downloadUrl", "previewUrl", "thumbnailUrl"):
+            url = item.get(key)
+            if url:
+                urls.append(str(url))
+                break
+    return urls
 
 
 def parse_date_value(raw: Any) -> date | None:
@@ -468,7 +492,7 @@ def normalize_records(
     seen_business_keys: set[tuple[str, str, str, str, str]] = set()
     skipped_duplicates: list[str] = []
 
-    for raw_record in raw_records:
+    for source_index, raw_record in enumerate(raw_records):
         cells = raw_record.get("cells", {})
         values: dict[str, Any] = {}
         for standard_key, field_id in field_ids.items():
@@ -496,6 +520,7 @@ def normalize_records(
             ingredients=normalize_paragraph_text(str(values.get("ingredients") or "")),
             image_urls=values.get("appearanceImages") or [],
             remark=remark,
+            source_index=source_index,
         )
         if record.record_id and record.record_id in seen_record_ids:
             skipped_duplicates.append(describe_report_record(record))
@@ -513,7 +538,7 @@ def normalize_records(
         key=lambda r: (
             brand_order.get(r.brand, 9999),
             r.launch_date or date.min,
-            r.product_name,
+            r.source_index,
         )
     )
     if skipped_duplicates:
@@ -621,7 +646,29 @@ def text_to_column_width_chars(text: str, padding_chars: float = 0.0) -> float:
 
 def price_blocks(text: str) -> list[str]:
     value = clean_price_text(text)
-    return [part.strip() for part in value.split("/") if part.strip()] or ([value] if value else [])
+    return split_outside_parentheses(value) or ([value] if value else [])
+
+
+def split_outside_parentheses(text: str, separator: str = "/") -> list[str]:
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for char in text:
+        if char in "(（":
+            depth += 1
+        elif char in ")）" and depth > 0:
+            depth -= 1
+        if char == separator and depth == 0:
+            part = "".join(current).strip()
+            if part:
+                parts.append(part)
+            current = []
+            continue
+        current.append(char)
+    tail = "".join(current).strip()
+    if tail:
+        parts.append(tail)
+    return parts
 
 
 def compute_column_widths(records: list[ReportRecord], layout: dict[str, Any]) -> dict[str, float]:
@@ -938,7 +985,7 @@ def price_with_slash_wrap(text: str, threshold_chars: int) -> str:
     text = clean_price_text(text)
     if not text or "/" not in text:
         return text
-    return "/\n".join(part.strip() for part in text.split("/") if part.strip())
+    return "/\n".join(split_outside_parentheses(text))
 
 
 def build_price_rich_text(text: str, font_name: str, size: int, strike_pattern: str) -> CellRichText | str:

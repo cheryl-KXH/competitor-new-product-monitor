@@ -99,11 +99,18 @@ def html_text(value: Any) -> str:
     return escape_text(value).replace("\n", "<br>")
 
 
+def render_brand_html(value: str) -> str:
+    text = str(value or "")
+    text = re.sub(r"([\u4e00-\u9fff])([A-Za-z0-9]+)", r"\1<wbr>\2", text)
+    text = re.sub(r"([A-Za-z0-9]+)([\u4e00-\u9fff])", r"\1<wbr>\2", text)
+    return html_text(text).replace("&lt;wbr&gt;", "<wbr>")
+
+
 def render_remark_html(value: str) -> str:
     text = str(value or "")
     text = re.sub(r"([\u4e00-\u9fff])([A-Za-z0-9]+)", r"\1<wbr>\2", text)
     text = re.sub(r"([A-Za-z0-9]+)([\u4e00-\u9fff])", r"\1<wbr>\2", text)
-    break_after_chars = set(" 、/-")
+    break_after_chars = set(" 、/-，；：")
     parts: list[str] = []
     index = 0
     while index < len(text):
@@ -133,10 +140,32 @@ def insert_price_soft_breaks(text: str) -> str:
     return re.sub(r"(?<=[)）])(?=[(（])", PRICE_SOFT_BREAK, text)
 
 
+def split_outside_parentheses(text: str, separator: str = "/") -> list[str]:
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for char in text:
+        if char in "(（":
+            depth += 1
+        elif char in ")）" and depth > 0:
+            depth -= 1
+        if char == separator and depth == 0:
+            part = "".join(current).strip()
+            if part:
+                parts.append(part)
+            current = []
+            continue
+        current.append(char)
+    tail = "".join(current).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
 def render_price_html(value: str, wrap_after_slash: bool) -> str:
     text = clean_price_text(value)
     if wrap_after_slash and "/" in text:
-        text = "/\n".join(part.strip() for part in text.split("/") if part.strip())
+        text = "/\n".join(split_outside_parentheses(text))
     else:
         text = insert_price_soft_breaks(text)
 
@@ -176,7 +205,7 @@ def price_blocks(text: str) -> list[str]:
     value = clean_price_text(text)
     if not value:
         return [""]
-    return [part.strip() for part in value.split("/") if part.strip()] or [value]
+    return split_outside_parentheses(value) or [value]
 
 
 def safe_price_width_segments(text: str) -> list[str]:
@@ -317,7 +346,7 @@ def build_summary_html(records: list[ReportRecord], brands: list[str], layout: d
             line_count = min(5, summary_line_count(record, columns, layout))
             row = [f'<tr class="line-count-{line_count}">']
             if index == 0:
-                row.append(f'<td class="brand-cell" rowspan="{row_count}">{escape_text(brand)}</td>')
+                row.append(f'<td class="brand-cell" rowspan="{row_count}">{render_brand_html(brand)}</td>')
                 row.append(f'<td class="count-cell" rowspan="{row_count}">{row_count}</td>')
             row.extend(
                 [
@@ -446,11 +475,11 @@ th, td {{ border: {border_width}px solid #{colors['black']}; text-align: center;
 .summary-table th {{ background: #{colors['headerFill']}; font-weight: 700; }}
 .summary-header > th {{ height: {image_layout['summary'].get('headerHeightPx', 58)}px; }}
 .summary-header > th:nth-child(2) {{ white-space: nowrap; word-break: keep-all; }}
-.brand-cell {{ white-space: nowrap; word-break: keep-all; }}
+.brand-cell {{ white-space: normal; word-break: normal; overflow-wrap: normal; }}
 .product-name-cell {{ white-space: nowrap; word-break: keep-all; overflow-wrap: normal; }}
 .category-cell, .launch-date-cell {{ word-break: keep-all; }}
 .price-cell {{ word-break: keep-all; overflow-wrap: normal; }}
-.remark-cell {{ word-break: keep-all; overflow-wrap: normal; white-space: normal; }}
+.remark-cell {{ word-break: normal; overflow-wrap: normal; white-space: normal; }}
 .brand-cell {{ background: #{colors['brandFill']}; font-weight: 700; }}
 .count-cell {{ font-weight: 700; font-size: 14px; }}
 .tracked {{ width: {summary_width}px; margin: 0 auto {image_layout.get('trackedBrands', {}).get('marginBottomPx', 12)}px; font-size: {fonts['smallSizePx']}px; text-align: justify; text-align-last: left; white-space: normal; word-break: normal; overflow-wrap: normal; line-height: 1.35; }}

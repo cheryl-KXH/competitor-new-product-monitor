@@ -159,6 +159,6 @@
   },
   "sort": {
     "brandOrder": "defaultBrands",
-    "withinBrand": ["launchDate", "productName"]
+    "withinBrand": ["launchDate", "tableOrder"]
   }
 }
