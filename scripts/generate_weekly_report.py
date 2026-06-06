@@ -534,10 +534,17 @@ def normalize_records(
         seen_business_keys.add(business_key)
         normalized.append(record)
 
+    series_order: dict[tuple[str, date | None, str], int] = {}
+    for record in sorted(normalized, key=lambda r: r.source_index):
+        series_key = (record.brand, record.launch_date, record.series)
+        if series_key not in series_order:
+            series_order[series_key] = len(series_order)
+
     normalized.sort(
         key=lambda r: (
             brand_order.get(r.brand, 9999),
             r.launch_date or date.min,
+            series_order.get((r.brand, r.launch_date, r.series), 9999),
             r.source_index,
         )
     )
