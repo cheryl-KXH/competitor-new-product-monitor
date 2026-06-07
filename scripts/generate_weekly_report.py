@@ -1423,12 +1423,13 @@ def build_workbook(
                     "appearanceImages": "",
                 }
                 for key, label in layout["details"]["rowsPerProduct"]:
+                    label_fill = colors["detailLabelFill"] if key in ("productName", "series") else colors["white"]
                     ws[f"B{detail_row}"] = label
                     apply_base_style(
                         ws[f"B{detail_row}"],
                         chinese_font,
                         bold=key == "productName",
-                        fill=colors["detailLabelFill"],
+                        fill=label_fill,
                         border=border,
                         wrap_text=layout["details"].get("labelWrapText", False),
                     )

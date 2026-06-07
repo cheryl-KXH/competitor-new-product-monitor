@@ -402,10 +402,10 @@ def build_detail_html(
                 [
                     f'<tr class="detail-row detail-row-compact"><th class="detail-label strong">新品名称</th><td class="detail-value name-row strong">{html_text(record.product_name)}</td></tr>',
                     f'<tr class="detail-row detail-row-compact"><th class="detail-label">产品系列归属</th><td class="detail-value series-row">{html_text(record.series)}</td></tr>',
-                    f'<tr class="detail-row detail-row-text"><th class="detail-label">产品卖点介绍</th><td class="detail-value long-text">{html_text(record.selling_point)}</td></tr>',
-                    f'<tr class="detail-row detail-row-compact"><th class="detail-label">产品价格</th><td class="detail-value">{render_price_html(record.price, False)}</td></tr>',
-                    f'<tr class="detail-row detail-row-compact"><th class="detail-label">原料构成</th><td class="detail-value">{html_text(record.ingredients)}</td></tr>',
-                    f'<tr class="detail-row detail-row-image"><th class="detail-label image-label">产品外观</th><td class="detail-value image-cell">{image_html}</td></tr>',
+                    f'<tr class="detail-row detail-row-text"><th class="detail-label plain">产品卖点介绍</th><td class="detail-value long-text">{html_text(record.selling_point)}</td></tr>',
+                    f'<tr class="detail-row detail-row-compact"><th class="detail-label plain">产品价格</th><td class="detail-value">{render_price_html(record.price, False)}</td></tr>',
+                    f'<tr class="detail-row detail-row-compact"><th class="detail-label plain">原料构成</th><td class="detail-value">{html_text(record.ingredients)}</td></tr>',
+                    f'<tr class="detail-row detail-row-image"><th class="detail-label image-label plain">产品外观</th><td class="detail-value image-cell">{image_html}</td></tr>',
                 ]
             )
         rows.append("</table>")
@@ -487,6 +487,7 @@ th, td {{ border: {border_width}px solid #{colors['black']}; text-align: center;
 .detail-table + .detail-table {{ margin-top: -{border_width}px; }}
 .brand-header {{ height: {details.get('brandHeaderHeightPx', 20)}px; background: #{colors['detailHeaderFill']}; font-weight: 700; }}
 .detail-label {{ width: {label_width}px; background: #{colors['detailLabelFill']}; font-weight: 400; white-space: nowrap; word-break: keep-all; }}
+.detail-label.plain {{ background: #{colors['white']}; }}
 .detail-label.strong {{ font-weight: 700; }}
 .detail-table th, .detail-table td {{ line-height: 1.35; padding: 1px 3px; }}
 .detail-row-compact > th, .detail-row-compact > td {{ height: 18px; }}
